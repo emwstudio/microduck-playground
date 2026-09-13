@@ -5991,6 +5991,265 @@ def swing_string_extension_barrier_penalty(
     )
 
 
+# =============================================================================
+# Swing 360 — rigid-arm full-circle pumping
+# =============================================================================
+
+_SWING360_PIVOT_JOINT_NAME = "passive_swing_pivot"
+
+
+def _swing360_kinematics(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return the continuous pivot angle and rate from the passive hinge.
+
+    MuJoCo hinge coordinates are unbounded, so the angle accumulates full
+    turns without wrapping; the abs() frontier below treats clockwise and
+    counter-clockwise loops symmetrically. This is exact mechanism state for
+    rewards and the privileged critic only — the actor stays on IMU/encoders.
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+    cache = env.__dict__.setdefault("_swing360_pivot_cache", {})
+    key = id(asset)
+    ids = cache.get(key)
+    if ids is None:
+        ids, _ = asset.find_joints(_SWING360_PIVOT_JOINT_NAME)
+        cache[key] = ids
+    angle = asset.data.joint_pos[:, ids].squeeze(-1)
+    rate = asset.data.joint_vel[:, ids].squeeze(-1)
+    return angle, rate
+
+
+def _swing360_frontier_value(mag: torch.Tensor) -> torch.Tensor:
+    """Piecewise frontier value: quadratic to pi, tangent-linear beyond.
+
+    (f/pi)^2 prices the hard push through the top above polishing small
+    early arcs. Past pi the tangent 1 + 2(f/pi - 1) keeps every extra turn
+    paying fairly, but removes the quadratic jackpot whose reward mass
+    drowned the bottom-pumping gradient in v2 (spin-from-arc-spawn episodes
+    outpaid pumping episodes by hundreds to one).
+    """
+    x = mag / math.pi
+    return torch.where(x <= 1.0, x.square(), 1.0 + 2.0 * (x - 1.0))
+
+
+def swing360_frontier_progress(
+    env: ManagerBasedRlEnv,
+    max_paid_rate: float = 8.0,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Pay only new ground on the absolute unwrapped pivot angle.
+
+    Deliberately non-farmable: holding an angle or re-swinging an
+    already-reached arc pays zero. The spawn floor (set by arc-spawn resets)
+    makes episodes that START partway up the arc earn only what they add
+    beyond their spawn — free spawn energy does not count. The rate cap
+    makes slow arrival worth the same as fast arrival (no jackpot).
+    """
+    angle, _ = _swing360_kinematics(env, asset_cfg)
+    mag = torch.abs(angle)
+    fresh = env.episode_length_buf <= 1
+    if not hasattr(env, "_swing360_frontier"):
+        env._swing360_frontier = torch.zeros(env.num_envs, device=env.device)
+    env._swing360_frontier[fresh] = 0.0
+    old = env._swing360_frontier
+    floor = getattr(env, "_swing360_spawn_floor", None)
+    if floor is not None:
+        old = torch.maximum(old, floor)
+    cap = max_paid_rate * env.step_dt
+    paid_mag = old + torch.clamp(mag - old, min=0.0, max=cap)
+    paid = _swing360_frontier_value(paid_mag) - _swing360_frontier_value(old)
+    env._swing360_frontier = torch.maximum(env._swing360_frontier, mag)
+    return paid / env.step_dt
+
+
+def swing360_height_reward(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Dense rise above the bottom from the periodic pivot angle.
+
+    cos of the unbounded hinge angle is naturally periodic, so each pass
+    through the top pays again. An inverted park is drained by pivot bearing
+    friction/damping instead of paying forever.
+    """
+    angle, _ = _swing360_kinematics(env, asset_cfg)
+    return torch.clamp(1.0 - torch.cos(angle), 0.0, 2.0)
+
+
+def swing360_energy_reward(
+    env: ManagerBasedRlEnv,
+    max_equivalent_height: float = 2.0,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Pendulum energy as equivalent rise in pivot lengths; phase aid only."""
+    angle, rate = _swing360_kinematics(env, asset_cfg)
+    equivalent_height = 1.0 - torch.cos(angle) + 0.5 * (0.38 / 9.81) * rate.square()
+    return torch.clamp(equivalent_height, 0.0, max_equivalent_height)
+
+
+def swing360_state_observation(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Six-dimensional privileged critic context for the rigid-arm mechanism.
+
+    The deployable actor still receives only IMU/encoder/history signals.
+    Exact pivot state makes the critic Markov without changing either actor
+    or critic tensor dimensionality.
+    """
+    angle, rate = _swing360_kinematics(env, asset_cfg)
+    energy_height = torch.clamp(
+        1.0 - torch.cos(angle) + 0.5 * (0.38 / 9.81) * rate.square(), 0.0, 2.0
+    )
+    zeros = torch.zeros(env.num_envs, device=env.device)
+    return torch.stack(
+        (
+            torch.sin(angle),
+            torch.cos(angle),
+            rate / 8.0,
+            torch.abs(angle) / (2.0 * math.pi),
+            energy_height / 2.0,
+            zeros,
+        ),
+        dim=-1,
+    )
+
+
+def swing360_frontier_observation(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Privileged critic context for the history-dependent frontier reward.
+
+    The paid frontier is episode history, not instantaneous state; the critic
+    must see it to stay Markov for the frontier reward. This reuses the
+    critic's three zero command slots, preserving checkpoint tensor shapes.
+    """
+    zeros = torch.zeros(env.num_envs, device=env.device)
+    frontier = getattr(env, "_swing360_frontier", zeros)
+    fresh = env.episode_length_buf <= 1
+    frontier = torch.where(fresh, zeros, frontier)
+    progress = torch.clamp(
+        env.episode_length_buf.float() / float(env.max_episode_length),
+        0.0,
+        1.0,
+    )
+    return torch.stack(
+        (
+            frontier / (2.0 * math.pi),
+            progress,
+            zeros,
+        ),
+        dim=-1,
+    )
+
+
+def swing360_arc_spawn(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+    probability: float = 0.25,
+    max_angle: float = 2.97,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> None:
+    """Spawn a fraction of episodes motionless partway up the swing arc.
+
+    Reverse-curriculum spawn for the last mile: episodes that always start
+    at the bottom give the policy no on-policy data near the top, so the
+    hardest part of the maneuver is exactly where it never practices. The
+    pivot hinge and the welded trunk must be written consistently, otherwise
+    the weld constraint starts the episode already violated.
+
+    Disabled at probability 0 (play/eval always spawn at the bottom, so
+    deployment metrics stay comparable across recipes). Every reset writes
+    the spawn floor: picked envs only earn frontier progress BEYOND their
+    spawn angle, unpicked envs get floor zero.
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+    cache = env.__dict__.setdefault("_swing360_pivot_cache", {})
+    key = id(asset)
+    pivot_ids = cache.get(key)
+    if pivot_ids is None:
+        pivot_ids, _ = asset.find_joints(_SWING360_PIVOT_JOINT_NAME)
+        cache[key] = pivot_ids
+
+    floor = getattr(env, "_swing360_spawn_floor", None)
+    if floor is None or floor.shape[0] != env.num_envs:
+        floor = torch.zeros(env.num_envs, device=env.device)
+    floor = floor.clone()
+    floor[env_ids] = 0.0
+    if probability <= 0.0:
+        env._swing360_spawn_floor = floor
+        return
+    pick = torch.rand(len(env_ids), device=env.device) < probability
+    if not torch.any(pick):
+        env._swing360_spawn_floor = floor
+        return
+    ids = env_ids[pick]
+    theta = (torch.rand(len(ids), device=env.device) * 2.0 - 1.0) * max_angle
+    floor[ids] = torch.abs(theta)
+    env._swing360_spawn_floor = floor
+
+    joint_pos = asset.data.joint_pos[ids].clone()
+    joint_vel = asset.data.joint_vel[ids].clone()
+    joint_pos[:, pivot_ids] = theta.unsqueeze(-1)
+    joint_vel[:] = 0.0
+    asset.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=ids)
+
+    # Trunk pose consistent with the weld: anchor + R_y(theta) @ relpos,
+    # relpos = (0, 0, -(rod + attach_z)), quat = rotation about y by theta.
+    from mjlab_microduck.robot.microduck_constants import (
+        SWING_ANCHOR_HEIGHT,
+        SWING360_ROD_LENGTH,
+        SWING_ATTACHMENT_Z,
+    )
+
+    r = SWING360_ROD_LENGTH + SWING_ATTACHMENT_Z
+    zeros = torch.zeros_like(theta)
+    pose = torch.stack(
+        (
+            -r * torch.sin(theta),
+            zeros,
+            torch.full_like(theta, SWING_ANCHOR_HEIGHT) - r * torch.cos(theta),
+            torch.cos(theta / 2.0),
+            zeros,
+            torch.sin(theta / 2.0),
+            zeros,
+        ),
+        dim=-1,
+    )
+    asset.write_root_link_pose_to_sim(pose, env_ids=ids)
+    asset.write_root_link_velocity_to_sim(
+        torch.zeros(len(ids), 6, device=env.device), env_ids=ids
+    )
+
+
+def swing360_arc_spawn_curriculum(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+    event_name: str,
+    probability_stages: list[dict],
+) -> torch.Tensor:
+    """Ramp the arc-spawn probability on training progress.
+
+    Bottom-up pumping must consolidate before reverse-curriculum spawns
+    enter the mix — in v2, arc spawns from step 0 let the spin jackpot
+    capture the reward mass before pumping existed. The stage step is in
+    env steps (iteration x num_steps_per_env), matching reward_weight.
+    """
+    del env_ids
+    # NOTE: must update the live EventManager term_cfg, not env.cfg.events —
+    # EventManager.__init__ does deepcopy(cfg), so mutating env.cfg.events is a no-op.
+    event_cfg = env.event_manager.get_term_cfg(event_name)
+    current = probability_stages[0]["probability"]
+    for stage in probability_stages:
+        if env.common_step_counter > stage["step"]:
+            current = stage["probability"]
+    event_cfg.params["probability"] = current
+    return torch.tensor([current])
+
+
 def head_pose_tracking(
     env: ManagerBasedRlEnv,
     command_name: str = "head_pose",

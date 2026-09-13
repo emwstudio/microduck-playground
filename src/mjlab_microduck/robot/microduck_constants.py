@@ -42,6 +42,18 @@ SWING_ATTACHMENT_Y = 0.088
 SWING_ATTACHMENT_Z = 0.085
 SWING_BOTTOM_TRUNK_Z = SWING_ANCHOR_HEIGHT - SWING_HANG_LENGTH - SWING_ATTACHMENT_Z
 
+# Swing 360 rigid-arm variant: a compression-capable arm on a y-axis hinge
+# replaces the tension-only cords, so the seat can travel the full circle
+# instead of going slack past the horizontal. Same pivot-to-attach geometry
+# as the cord equilibrium; bearing loss keeps an inverted park from paying.
+# Pivot bearing loss. v1 damping (0.02) was physics-blind: dissipation grows
+# as omega^2 and capped the learned arc at ~76 deg (~18% energy loss per
+# cycle). 0.002 keeps a non-zero bearing model without an amplitude ceiling.
+SWING360_ROD_LENGTH = SWING_HANG_LENGTH
+SWING360_ROD_MASS = 0.040
+SWING360_PIVOT_DAMPING = 0.002
+SWING360_PIVOT_FRICTIONLOSS = 0.005
+
 assert MICRODUCK_WALK_XML.exists(), f"XML not found: {MICRODUCK_WALK_XML}"
 assert MICRODUCK_ALLCOLLISIONS_XML.exists(), f"XML not found: {MICRODUCK_ALLCOLLISIONS_XML}"
 assert MICRODUCK_BALL_XML.exists(), f"XML not found: {MICRODUCK_BALL_XML}"
@@ -85,15 +97,12 @@ def get_rollers_backlash_spec() -> mujoco.MjSpec:
     return mujoco.MjSpec.from_file(str(MICRODUCK_ALLCOLLISIONS_ROLLERS_BACKLASH_XML))
 
 
-def get_swing_spec() -> mujoco.MjSpec:
-    """Return Microduck rigidly retained in its seat on two ideal strings.
+def _build_swing_seat_spec() -> tuple[mujoco.MjSpec, "mujoco.MjsBody"]:
+    """Shared seat/retention/frame assembly for the swing variants.
 
-    Each string is a MuJoCo spatial tendon with a tension-only elastic dead
-    band plus a soft upper safety limit. It can transmit tension but never
-    compression and is therefore a massless cord rather than a rod or a
-    decorative capsule.
-    The seat and retention kit are fixed to the trunk (the fitted strap model)
-    while every head and leg joint remains actuated and free to pump.
+    Returns the spec with the trunk at the hanging equilibrium, the seat
+    payload attached, and the anchor/attach sites created; each swing variant
+    adds its own suspension (tension-only tendons or a rigid arm) on top.
     """
     spec = mujoco.MjSpec.from_file(str(MICRODUCK_ALLCOLLISIONS_XML))
 
@@ -205,6 +214,21 @@ def get_swing_spec() -> mujoco.MjSpec:
             size=(0.003,),
             rgba=(0.55, 0.38, 0.22, 1.0),
         )
+    return spec, trunk
+
+
+def get_swing_spec() -> mujoco.MjSpec:
+    """Return MicroDuck rigidly retained in its seat on two ideal strings.
+
+    Each string is a MuJoCo spatial tendon with a tension-only elastic dead
+    band plus a soft upper safety limit. It can transmit tension but never
+    compression and is therefore a massless cord rather than a rod or a
+    decorative capsule.
+    The seat and retention kit are fixed to the trunk (the fitted strap model)
+    while every head and leg joint remains actuated and free to pump.
+    """
+    spec, _ = _build_swing_seat_spec()
+    for side in ("left", "right"):
         string = spec.add_tendon(
             name=f"swing_string_{side}",
             stiffness=SWING_STRING_STIFFNESS,
@@ -218,7 +242,81 @@ def get_swing_spec() -> mujoco.MjSpec:
         )
         string.wrap_site(f"swing_anchor_{side}")
         string.wrap_site(f"swing_attach_{side}")
+    return spec
 
+
+def get_swing360_spec() -> mujoco.MjSpec:
+    """Return MicroDuck rigidly retained in its seat on a rigid swing arm.
+
+    The tension-only cords of get_swing_spec are replaced by a single rigid
+    arm on a y-axis hinge at the crossbar height. The arm transmits
+    compression, so the seat can travel through the full 360-degree circle
+    instead of the cords going slack past the horizontal. A weld equality
+    bolts the trunk to the arm tip (the seat is rigidly mounted) while every
+    head and leg joint remains actuated and free to pump. Pivot damping and
+    dry friction model bearing loss, which also drains a frictionless
+    inverted park instead of letting it pay height reward forever.
+    """
+    spec, _ = _build_swing_seat_spec()
+
+    arm = spec.worldbody.add_body(
+        name="swing360_arm", pos=(0.0, 0.0, SWING_ANCHOR_HEIGHT)
+    )
+    arm.add_joint(
+        name="passive_swing_pivot",
+        type=mujoco.mjtJoint.mjJNT_HINGE,
+        axis=(0.0, 1.0, 0.0),
+        damping=SWING360_PIVOT_DAMPING,
+        frictionloss=SWING360_PIVOT_FRICTIONLOSS,
+    )
+    # Mass-bearing but non-colliding: the weld carries the physics, and the
+    # arm must pass through the robot's own space without contact forces.
+    arm.add_geom(
+        name="swing360_arm_shaft",
+        type=mujoco.mjtGeom.mjGEOM_CAPSULE,
+        fromto=(0.0, 0.0, 0.0, 0.0, 0.0, -SWING360_ROD_LENGTH),
+        size=(0.004,),
+        material="swing_frame_material",
+        contype=0,
+        conaffinity=0,
+        mass=SWING360_ROD_MASS,
+        group=2,
+    )
+    arm.add_geom(
+        name="swing360_arm_crossbar",
+        type=mujoco.mjtGeom.mjGEOM_CAPSULE,
+        fromto=(
+            0.0, -SWING_ATTACHMENT_Y, -SWING360_ROD_LENGTH,
+            0.0, SWING_ATTACHMENT_Y, -SWING360_ROD_LENGTH,
+        ),
+        size=(0.004,),
+        material="swing_frame_material",
+        contype=0,
+        conaffinity=0,
+        mass=0.010,
+        group=2,
+    )
+
+    # Weld data: anchor is the weld point in the trunk frame (its origin);
+    # relpos is that point's position in the arm frame (hanging straight
+    # down at the cord-equilibrium length), relquat identity.
+    weld = spec.add_equality()
+    weld.type = mujoco.mjtEq.mjEQ_WELD
+    weld.objtype = mujoco.mjtObj.mjOBJ_BODY
+    weld.name = "swing360_seat_weld"
+    weld.name1 = "swing360_arm"
+    weld.name2 = "trunk_base"
+    weld.data[0] = 0.0
+    weld.data[1] = 0.0
+    weld.data[2] = 0.0
+    weld.data[3] = 0.0
+    weld.data[4] = 0.0
+    weld.data[5] = -(SWING360_ROD_LENGTH + SWING_ATTACHMENT_Z)
+    weld.data[6] = 1.0
+    weld.data[7] = 0.0
+    weld.data[8] = 0.0
+    weld.data[9] = 0.0
+    weld.data[10] = 1.0
     return spec
 
 
@@ -351,6 +449,16 @@ MICRODUCK_STANDUP_ROBOT_CFG = EntityCfg(
 
 MICRODUCK_SWING_ROBOT_CFG = EntityCfg(
     spec_fn=get_swing_spec,
+    init_state=SWING_SEATED_FRAME,
+    collisions=(FULL_COLLISION,),
+    articulation=EntityArticulationInfoCfg(
+        actuators=(actuators,),
+        soft_joint_pos_limit_factor=0.95,
+    ),
+)
+
+MICRODUCK_SWING360_ROBOT_CFG = EntityCfg(
+    spec_fn=get_swing360_spec,
     init_state=SWING_SEATED_FRAME,
     collisions=(FULL_COLLISION,),
     articulation=EntityArticulationInfoCfg(
