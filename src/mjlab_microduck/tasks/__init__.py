@@ -80,6 +80,10 @@ from .microduck_swing_env_cfg import (
     make_microduck_swing_env_cfg,
     MicroduckSwingRlCfg,
 )
+from .microduck_swing360_env_cfg import (
+    make_microduck_swing360_env_cfg,
+    MicroduckSwing360RlCfg,
+)
 from .backlash import make_backlash_variant
 
 # Standard velocity task
@@ -98,6 +102,16 @@ register_mjlab_task(
     env_cfg=make_microduck_swing_env_cfg(),
     play_env_cfg=make_microduck_swing_env_cfg(play=True),
     rl_cfg=MicroduckSwingRlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
+
+# Full-circle variant: the seat rides a rigid arm on a passive y-axis hinge
+# (weld equality to the trunk), so the mechanism can travel through the top.
+register_mjlab_task(
+    task_id="Mjlab-Swing360-MicroDuck",
+    env_cfg=make_microduck_swing360_env_cfg(),
+    play_env_cfg=make_microduck_swing360_env_cfg(play=True),
+    rl_cfg=MicroduckSwing360RlCfg,
     runner_cls=MicroduckOnPolicyRunner,
 )
 
