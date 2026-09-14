@@ -16,7 +16,6 @@ like a human puller's.
 
 ## Files
 
-- `source/generate_tail_hook.py` — first wire-tube generator (superseded);
 - `source/cad_rig.py` — CAD pipeline (trimesh/manifold): band, bosses,
   carabiner with gate; all dimensions measured off the robot (see
   `src/mjlab_microduck/robot/tug_of_war.py` for the rope-side constants);
