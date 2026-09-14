@@ -14,6 +14,7 @@ from mjlab_microduck.robot.tug_of_war import (
     compute_obs,
     duck_spawns,
     find_duck_rigs,
+    resolve_rope_visuals,
     team_prefixes,
 )
 
@@ -35,9 +36,19 @@ def test_spec_has_ten_robots_140_actuators_18_cords(tug_model) -> None:
 def test_all_rope_sites_resolve(tug_model) -> None:
     red, blue = team_prefixes(5)
     for prefix in red + blue:
-        for side in ("left", "right"):
+        for side in ("left", "right", "chest"):
             assert mujoco.mj_name2id(
                 tug_model, mujoco.mjtObj.mjOBJ_SITE, f"{prefix}rope_{side}") >= 0
+
+
+def test_hemp_visuals_cover_cords_and_belts(tug_model) -> None:
+    # 9 links x 2 strands + 10 ducks x 2 belt segments, physics tendons hidden.
+    assert tug_model.nmocap == 9 * 2 + 10 * 2
+    assert tug_model.ntendon == 18
+    visuals = resolve_rope_visuals(tug_model, 5)
+    assert len(visuals) == 38
+    assert all(v.body_id >= 0 and v.geom_id >= 0 for v in visuals)
+    assert all(v.site_a_id >= 0 and v.site_b_id >= 0 for v in visuals)
 
 
 def test_team_shell_colors_differ(tug_model) -> None:

@@ -32,6 +32,8 @@ from mjlab_microduck.robot.tug_of_war import (
     compute_obs,
     duck_spawns,
     find_duck_rigs,
+    resolve_rope_visuals,
+    update_rope_visuals,
 )
 
 # Official alpha walking policy (walking gait keeps a support foot — the
@@ -115,6 +117,7 @@ def main() -> None:
     input_name = session.get_inputs()[0].name
     output_name = session.get_outputs()[0].name
 
+    rope_visuals = resolve_rope_visuals(model, args.n_per_team)
     renderer = None
     writer = None
     if not args.no_render:
@@ -163,6 +166,7 @@ def main() -> None:
                 mujoco.mj_step(model, data)
             step += 1
             if renderer is not None and step % render_skip == 0:
+                update_rope_visuals(model, data, rope_visuals)
                 renderer.update_scene(data, camera)
                 writer.append_data(renderer.render())
             if step * control_dt > 1.0:  # grace period: spawn transients
@@ -183,6 +187,7 @@ def main() -> None:
                 for _ in range(decimation):
                     mujoco.mj_step(model, data)
                 if step % render_skip == 0:
+                    update_rope_visuals(model, data, rope_visuals)
                     renderer.update_scene(data, camera)
                     writer.append_data(renderer.render())
                 step += 1

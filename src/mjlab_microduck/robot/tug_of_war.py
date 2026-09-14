@@ -48,8 +48,13 @@ ROPE_SLACK = 0.005          # dead band extends this far past the spawn distance
 ROPE_LIMIT_MARGIN = 0.05    # soft upper safety catch past the dead band
 ROPE_WIDTH = 0.0025
 ROPE_RGBA = (0.92, 0.87, 0.70, 1.0)
-ROPE_SITE_Y = 0.088
-ROPE_SITE_Z = 0.085
+# Waist-wrap sites sit ON the torso shell (trunk half-width ~0.047, front
+# face ~x+0.015, mid-torso z~0.035) — the rope visibly hugs the body instead
+# of floating beside it.
+ROPE_SITE_Y = 0.052
+ROPE_SITE_Z = 0.035
+ROPE_CHEST_X = 0.022
+ROPE_RADIUS = 0.0035
 
 DUCK_SPACING = 0.24         # trunk-to-trunk between teammates; duck x-extent is 0.21 m, tighter collides
 CENTER_GAP = 0.30           # trunk distance between the two inner ducks (tails face center)
@@ -105,6 +110,100 @@ def _add_rope_sites(spec: mujoco.MjSpec) -> None:
             size=(0.004,),
             rgba=ROPE_RGBA,
         )
+    trunk.add_site(
+        name="rope_chest",
+        pos=(ROPE_CHEST_X, 0.0, ROPE_SITE_Z),
+        size=(0.004,),
+        rgba=ROPE_RGBA,
+    )
+
+
+def _link_side_pairs(pa: str, pb: str, red: list[str]) -> tuple[tuple[str, str], ...]:
+    """Teammates face the same way: left site to left site. The center pair
+    faces away from each other, so r0's left sits at b0's right — same world
+    side — and left-left would cross the cords diagonally."""
+    same_facing = (pa in red) == (pb in red)
+    return (("left", "left"), ("right", "right")) if same_facing \
+        else (("left", "right"), ("right", "left"))
+
+
+def rope_visual_segments(n_per_team: int) -> list[tuple[str, str]]:
+    """Site-name pairs the hemp mocap cylinders span: every physics cord plus
+    a per-duck belt (left → chest → right) that wraps the rope around each
+    torso. Order matches the tugvis_* bodies in build_tug_spec."""
+    red, blue = team_prefixes(n_per_team)
+    chain = list(reversed(red)) + blue
+    segments: list[tuple[str, str]] = []
+    for pa, pb in zip(chain[:-1], chain[1:]):
+        for side_a, side_b in _link_side_pairs(pa, pb, red):
+            segments.append((f"{pa}rope_{side_a}", f"{pb}rope_{side_b}"))
+    for prefix in red + blue:
+        segments.append((f"{prefix}rope_left", f"{prefix}rope_chest"))
+        segments.append((f"{prefix}rope_chest", f"{prefix}rope_right"))
+    return segments
+
+
+def _hemp_rgba_texture(size: int = 64) -> bytes:
+    """Procedural twisted-hemp tile: diagonal light/dark strand bands plus
+    fibre noise. Tiles seamlessly along the cylinder."""
+    yy, xx = np.mgrid[0:size, 0:size]
+    strand = ((xx + yy) % 16) < 8
+    base = np.where(strand, 0.72, 0.52)[..., None] * np.array([1.0, 0.88, 0.66])
+    fibre = np.random.default_rng(7).normal(0.0, 0.05, (size, size, 1))
+    rgb = np.clip((base + fibre) * 255, 0, 255).astype(np.uint8)
+    return rgb.tobytes()
+
+
+def _add_hemp_material(spec: mujoco.MjSpec) -> None:
+    tex = spec.add_texture(name="tug_hemp_tex")
+    tex.type = mujoco.mjtTexture.mjTEXTURE_2D
+    tex.width, tex.height, tex.nchannel = 64, 64, 3
+    tex.data = _hemp_rgba_texture(64)
+    mat = spec.add_material(name="tug_hemp")
+    mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = "tug_hemp_tex"
+    mat.texrepeat = (6.0, 1.0)
+    mat.texuniform = True
+
+
+@dataclass
+class RopeVisual:
+    body_id: int
+    geom_id: int
+    site_a_id: int
+    site_b_id: int
+
+
+def resolve_rope_visuals(model: mujoco.MjModel, n_per_team: int) -> list[RopeVisual]:
+    segments = rope_visual_segments(n_per_team)
+    visuals = []
+    for idx, (site_a, site_b) in enumerate(segments):
+        body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"tugvis_{idx}")
+        geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"tugvis_{idx}")
+        visuals.append(RopeVisual(
+            body_id=body_id,
+            geom_id=geom_id,
+            site_a_id=mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, site_a),
+            site_b_id=mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, site_b),
+        ))
+    return visuals
+
+
+def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
+                        visuals: list[RopeVisual]) -> None:
+    """Move every hemp cylinder onto its site-to-site segment (per frame)."""
+    quat = np.zeros(4)
+    for vis in visuals:
+        p0 = data.site_xpos[vis.site_a_id]
+        p1 = data.site_xpos[vis.site_b_id]
+        direction = p1 - p0
+        length = float(np.linalg.norm(direction))
+        if length < 1e-6:
+            continue
+        mocap_id = model.body_mocapid[vis.body_id]
+        data.mocap_pos[mocap_id] = (p0 + p1) / 2.0
+        mujoco.mju_quatZ2Vec(quat, direction / length)
+        data.mocap_quat[mocap_id] = quat
+        model.geom_size[vis.geom_id][1] = length / 2.0
 
 
 def _add_line_geom(spec: mujoco.MjSpec, name: str, x: float,
@@ -143,13 +242,7 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
     for pa, pb in zip(chain[:-1], chain[1:]):
         nominal = gap if pa == red[0] else spacing
         link_len = nominal + ROPE_SLACK
-        # Teammates face the same way: left site to left site. The center pair
-        # faces away from each other, so r0's left sits at b0's right — same
-        # world side — and left-left would cross the cords diagonally.
-        same_facing = (pa in red) == (pb in red)
-        side_pairs = (("left", "left"), ("right", "right")) if same_facing \
-            else (("left", "right"), ("right", "left"))
-        for side_a, side_b in side_pairs:
+        for side_a, side_b in _link_side_pairs(pa, pb, red):
             cord = parent.add_tendon(
                 name=f"tug_{pa or 'r0_'}{pb}cord_{side_a}",
                 stiffness=ROPE_STIFFNESS,
@@ -158,11 +251,24 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
                 range=(0.0, link_len + ROPE_LIMIT_MARGIN),
                 width=ROPE_WIDTH,
                 rgba=ROPE_RGBA,
+                group=4,  # physics only; the hemp mocap geoms do the visuals
                 solref_limit=(0.02, 1.0),
                 solimp_limit=(0.90, 0.95, 0.001, 0.5, 2.0),
             )
             cord.wrap_site(f"{pa}rope_{side_a}")
             cord.wrap_site(f"{pb}rope_{side_b}")
+
+    _add_hemp_material(parent)
+    for idx in range(len(rope_visual_segments(n_per_team))):
+        body = parent.worldbody.add_body(name=f"tugvis_{idx}", mocap=True)
+        body.add_geom(
+            name=f"tugvis_{idx}",
+            type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+            size=(ROPE_RADIUS, 0.1, 0.0),
+            material="tug_hemp",
+            contype=0,
+            conaffinity=0,
+        )
 
     _add_line_geom(parent, "center_line", 0.0, (1.0, 1.0, 1.0, 1.0))
     _add_line_geom(parent, "win_line_red", -win_x, red_rgba)
