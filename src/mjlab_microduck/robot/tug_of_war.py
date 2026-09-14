@@ -259,7 +259,6 @@ def _add_rig_materials(spec: mujoco.MjSpec) -> None:
 def _load_hook_stls(spec: mujoco.MjSpec) -> None:
     """Parametric rig parts from hardware/tug-rig (STL, trunk-local)."""
     for mesh_name, filename in (("tug_hook_steel_stl", "tug_towpack.stl"),
-                                ("tug_hook_carabiner_stl", "tug_hook_carabiner.stl"),
                                 ("tug_chest_carabiner_stl", "tug_chest_carabiner.stl")):
         spec.add_mesh(name=mesh_name, file=str(_ROBOT_DIR / "assets" / filename))
 
@@ -314,15 +313,6 @@ def _add_harness_rings(spec: mujoco.MjSpec, n_per_team: int) -> None:
             type=mujoco.mjtGeom.mjGEOM_MESH,
             meshname="tug_hook_steel_stl",
             material="tug_frame_paint",
-            contype=0,
-            conaffinity=0,
-            density=0.0,
-        )
-        trunk.add_geom(
-            name=f"{prefix}tug_dring",
-            type=mujoco.mjtGeom.mjGEOM_MESH,
-            meshname="tug_hook_carabiner_stl",
-            material="tug_carabiner",
             contype=0,
             conaffinity=0,
             density=0.0,

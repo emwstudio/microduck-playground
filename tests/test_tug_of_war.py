@@ -42,7 +42,7 @@ def test_all_rope_sites_resolve(tug_model) -> None:
         assert mujoco.mj_name2id(
             tug_model, mujoco.mjtObj.mjOBJ_SITE, f"{prefix}rope_hook_chest") >= 0
         assert mujoco.mj_name2id(
-            tug_model, mujoco.mjtObj.mjOBJ_GEOM, f"{prefix}tug_dring") >= 0
+            tug_model, mujoco.mjtObj.mjOBJ_GEOM, f"{prefix}tug_hook_steel") >= 0
         assert mujoco.mj_name2id(
             tug_model, mujoco.mjtObj.mjOBJ_GEOM, f"{prefix}tug_chest_ring") >= 0
 
