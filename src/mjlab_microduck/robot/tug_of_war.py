@@ -319,13 +319,22 @@ def _add_waist_wraps(spec: mujoco.MjSpec, n_per_team: int) -> None:
         )
 
 
-SPAN_PIECE_LENGTH = 0.05    # fixed-length twisted piece, chains overlap
-SPAN_PIECES = 6             # pieces per inter-duck strand
-SAG_SUBSEGMENTS = SPAN_PIECES
+SPAN_T_SEGMENTS = 26        # sweep resolution per inter-duck strand
+SPAN_ALPHA_SEGMENTS = 6
+
+
+# Span rendering: precomputed swept-rope variants. MuJoCo's offscreen
+# renderer caches mesh VBOs and mjr_uploadMesh corrupts meshes with high
+# vertex offsets, so per-frame resweeping is out; instead we precompute a
+# (chord x sag) grid of complete swept ropes in a local frame (x = chord
+# axis, -z = sag) and per frame point each span's geom at the nearest
+# variant via model.geom_dataid — plain int writes, VBOs stay cached.
+CHORD_BINS = np.round(np.arange(0.16, 0.38, 0.02), 2)
+SAG_BINS = (0.0, 0.33, 0.67, 1.0)   # fraction of SAG_MAX
 
 
 @dataclass
-class RopeVisual:
+class SpanVisual:
     body_id: int
     geom_id: int
     trunk_a_id: int
@@ -333,35 +342,34 @@ class RopeVisual:
     local_a: np.ndarray    # endpoint on duck a (its back/center-side wrap end)
     local_b: np.ndarray    # endpoint on duck b (its front/away-side wrap end)
     nominal: float
-    fraction: float        # sub-segment start fraction along the strand
+    variant_mesh_ids: np.ndarray  # (len(CHORD_BINS), len(SAG_BINS))
 
 
 def resolve_rope_visuals(model: mujoco.MjModel, n_per_team: int,
                          spacing: float = DUCK_SPACING,
-                         gap: float = CENTER_GAP) -> list[RopeVisual]:
+                         gap: float = CENTER_GAP) -> list[SpanVisual]:
     red, blue = team_prefixes(n_per_team)
     chain = list(reversed(red)) + blue
-    visuals = []
+    spans = []
     for idx, (pa, pb) in enumerate(zip(chain[:-1], chain[1:])):
-        nominal = (gap if pa == red[0] else spacing)
-        trunk_a = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{pa}trunk_base")
-        trunk_b = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{pb}trunk_base")
-        for sub in range(SAG_SUBSEGMENTS):
-            body_id = mujoco.mj_name2id(
-                model, mujoco.mjtObj.mjOBJ_BODY, f"tugvis_{idx}_{sub}")
-            geom_id = mujoco.mj_name2id(
-                model, mujoco.mjtObj.mjOBJ_GEOM, f"tugvis_{idx}_{sub}")
-            visuals.append(RopeVisual(
-                body_id=body_id,
-                geom_id=geom_id,
-                trunk_a_id=trunk_a,
-                trunk_b_id=trunk_b,
-                local_a=WRAP_BACK_LOCAL.copy(),
-                local_b=WRAP_FRONT_LOCAL.copy(),
-                nominal=nominal,
-                fraction=sub / SAG_SUBSEGMENTS,
-            ))
-    return visuals
+        geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"tug_span_{idx}")
+        body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"tug_span_{idx}")
+        variant_ids = np.array([
+            [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_MESH, f"tug_var_{ci}_{si}")
+             for si in range(len(SAG_BINS))]
+            for ci in range(len(CHORD_BINS))
+        ])
+        spans.append(SpanVisual(
+            body_id=body_id,
+            geom_id=geom_id,
+            trunk_a_id=mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{pa}trunk_base"),
+            trunk_b_id=mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{pb}trunk_base"),
+            local_a=WRAP_BACK_LOCAL.copy(),
+            local_b=WRAP_FRONT_LOCAL.copy(),
+            nominal=(gap if pa == red[0] else spacing),
+            variant_mesh_ids=variant_ids,
+        ))
+    return spans
 
 
 def _site_world(data: mujoco.MjData, body_id: int, local: np.ndarray,
@@ -370,35 +378,128 @@ def _site_world(data: mujoco.MjData, body_id: int, local: np.ndarray,
     out += data.xpos[body_id]
 
 
-def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
-                        visuals: list[RopeVisual]) -> None:
-    """Lay every fixed-length twisted piece along its sagging strand curve.
+def _local_span_curve(chord: float, sag: float) -> np.ndarray:
+    """Sagging rope in its local frame: x from -chord/2..+chord/2 (8% into
+    the wraps on both ends), -z parabola, slight lateral bow."""
+    t = np.linspace(-0.08, 1.08, SPAN_T_SEGMENTS)
+    points = np.zeros((SPAN_T_SEGMENTS, 3))
+    points[:, 0] = (t - 0.5) * chord
+    points[:, 2] = -4.0 * sag * t * (1.0 - t)
+    points[:, 1] = min(0.006, 0.5 * sag + 0.001) * np.sin(np.pi * t)
+    return points
 
-    Pieces keep their mesh length (mesh scale is an asset-level property and
-    cannot change per frame); consecutive pieces overlap into each other and
-    the end pieces sink into the waist wraps, hiding every joint."""
-    quat = np.zeros(4)
+
+def _sweep_twisted(points: np.ndarray, twists: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """3-ply twisted tube swept along `points`: (verts, normals, faces);
+    topology/UVs are constant for a given resolution."""
+    n = len(points)
+    tangents = np.gradient(points, axis=0)
+    tangents /= np.linalg.norm(tangents, axis=1, keepdims=True)
+    ref = np.tile(np.array([0.0, 0.0, 1.0]), (n, 1))
+    flip = np.abs((tangents * ref).sum(axis=1)) > 0.9
+    ref[flip] = np.array([1.0, 0.0, 0.0])
+    u = ref - (ref * tangents).sum(axis=1, keepdims=True) * tangents
+    u /= np.linalg.norm(u, axis=1, keepdims=True)
+    w = np.cross(tangents, u)
+    alphas = 2.0 * np.pi * np.arange(SPAN_ALPHA_SEGMENTS) / SPAN_ALPHA_SEGMENTS
+    cos_a = np.cos(alphas)[None, :, None]
+    sin_a = np.sin(alphas)[None, :, None]
+    verts = []
+    t_frac = np.linspace(0.0, 1.0, n)
+    for k in range(3):
+        phi = 2.0 * np.pi * (k / 3 + twists * t_frac)
+        u2 = np.cos(phi)[:, None] * u + np.sin(phi)[:, None] * w
+        centers = points + ROPE_PLY_CENTER_R * u2
+        side = np.cross(tangents, u2)
+        rings = (centers[:, None, :] + ROPE_PLY_TUBE_R
+                 * (cos_a * u2[:, None, :] + sin_a * side[:, None, :]))
+        verts.append(rings.reshape(-1, 3))
+    verts = np.concatenate(verts)
+    faces = []
+    for k in range(3):
+        base = k * n * SPAN_ALPHA_SEGMENTS
+        for i in range(n - 1):
+            for j in range(SPAN_ALPHA_SEGMENTS):
+                j2 = (j + 1) % SPAN_ALPHA_SEGMENTS
+                a = base + i * SPAN_ALPHA_SEGMENTS + j
+                b = base + (i + 1) * SPAN_ALPHA_SEGMENTS + j
+                c = base + (i + 1) * SPAN_ALPHA_SEGMENTS + j2
+                d = base + i * SPAN_ALPHA_SEGMENTS + j2
+                faces.append((a, b, c))
+                faces.append((a, c, d))
+    faces = np.array(faces, dtype=np.int32)
+    v0 = verts[faces[:, 0]]
+    v1 = verts[faces[:, 1]]
+    v2 = verts[faces[:, 2]]
+    face_n = np.cross(v1 - v0, v2 - v0)
+    normals = np.zeros_like(verts)
+    for col in range(3):
+        np.add.at(normals, faces[:, col], face_n)
+    norms = np.linalg.norm(normals, axis=1, keepdims=True)
+    norms[norms < 1e-12] = 1.0
+    return verts, normals / norms, faces
+
+
+def span_uvs() -> np.ndarray:
+    """Constant UVs matching the sweep topology (v wraps plies)."""
+    uvs = []
+    n = SPAN_T_SEGMENTS
+    for k in range(3):
+        for i in range(n):
+            for j in range(SPAN_ALPHA_SEGMENTS):
+                uvs.append((i / (n - 1) * 4.0, (j / SPAN_ALPHA_SEGMENTS + k / 3) % 1.0))
+    return np.array(uvs, dtype=np.float32)
+
+
+def _build_span_variants(spec: mujoco.MjSpec) -> None:
+    uvs = span_uvs().flatten()
+    for ci, chord in enumerate(CHORD_BINS):
+        for si, sag_frac in enumerate(SAG_BINS):
+            sag = sag_frac * SAG_MAX
+            points = _local_span_curve(float(chord), sag)
+            twists = 2.5 * float(chord) / 0.05
+            verts, normals, faces = _sweep_twisted(points, twists)
+            mesh = spec.add_mesh(name=f"tug_var_{ci}_{si}")
+            mesh.uservert = verts.flatten().astype(np.float32)
+            mesh.usernormal = normals.flatten().astype(np.float32)
+            mesh.userface = faces.flatten()
+            mesh.usertexcoord = uvs
+
+
+def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
+                        spans: list[SpanVisual], mjr_context=None) -> None:
+    """Point each span geom at the nearest swept-rope variant and pose its
+    mocap body on the chord between the two wrap endpoints."""
     p0 = np.zeros(3)
     p1 = np.zeros(3)
-    for vis in visuals:
-        _site_world(data, vis.trunk_a_id, vis.local_a, p0)
-        _site_world(data, vis.trunk_b_id, vis.local_b, p1)
-        chord = float(np.linalg.norm(p1 - p0))
-        slack = max(0.0, vis.nominal - chord)
-        sag = min(SAG_MAX, SAG_PER_SLACK * slack + 0.002)
-        t0, t1 = vis.fraction, vis.fraction + 1.0 / SAG_SUBSEGMENTS
-        tm = (t0 + t1) / 2.0
-        center = p0 + (p1 - p0) * tm
-        center[2] -= 4.0 * sag * tm * (1.0 - tm)
-        # Tangent of the sag parabola at tm.
-        tangent = (p1 - p0).copy()
-        tangent[2] -= 4.0 * sag * (1.0 - 2.0 * tm)
-        norm = float(np.linalg.norm(tangent))
-        if norm < 1e-6:
+    quat = np.zeros(4)
+    rot = np.zeros(9)
+    for span in spans:
+        _site_world(data, span.trunk_a_id, span.local_a, p0)
+        _site_world(data, span.trunk_b_id, span.local_b, p1)
+        chord_vec = p1 - p0
+        chord = float(np.linalg.norm(chord_vec))
+        if chord < 1e-6:
             continue
-        mocap_id = model.body_mocapid[vis.body_id]
-        data.mocap_pos[mocap_id] = center
-        mujoco.mju_quatZ2Vec(quat, tangent / norm)
+        slack = max(0.0, span.nominal - chord)
+        sag = min(SAG_MAX, SAG_PER_SLACK * slack + 0.002)
+        ci = int(np.argmin(np.abs(CHORD_BINS - chord)))
+        si = int(np.argmin(np.abs(np.array(SAG_BINS) * SAG_MAX - sag)))
+        model.geom_dataid[span.geom_id] = span.variant_mesh_ids[ci, si]
+        # Mocap frame: x along the chord, local -z as close to world-down
+        # as the chord allows, so the baked sag always points down.
+        x_axis = chord_vec / chord
+        down = np.array([0.0, 0.0, -1.0])
+        z_axis = down - np.dot(down, x_axis) * x_axis
+        zn = np.linalg.norm(z_axis)
+        z_axis = z_axis / zn if zn > 1e-6 else np.array([0.0, 0.0, -1.0])
+        y_axis = np.cross(z_axis, x_axis)
+        rot[0::3] = x_axis
+        rot[1::3] = y_axis
+        rot[2::3] = z_axis
+        mujoco.mju_mat2Quat(quat, rot)
+        mocap_id = model.body_mocapid[span.body_id]
+        data.mocap_pos[mocap_id] = (p0 + p1) / 2.0
         data.mocap_quat[mocap_id] = quat
 
 
@@ -459,22 +560,19 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
                        t_segments=66, alpha_segments=6,
                        twists=WRAP_TURNS * ROPE_PLY_TWISTS_PER_TURN, uv_repeats=14.0,
                        sub_fibers=5, flyaway=260)
-    _twisted_tube_mesh(parent, "tug_piece", _straight_path(SPAN_PIECE_LENGTH),
-                       t_segments=30, alpha_segments=6, twists=2.5, uv_repeats=2.0,
-                       sub_fibers=5, flyaway=40)
     _add_waist_wraps(parent, n_per_team)
+    _build_span_variants(parent)
     n_strands = 2 * n_per_team - 1
     for idx in range(n_strands):
-        for sub in range(SAG_SUBSEGMENTS):
-            body = parent.worldbody.add_body(name=f"tugvis_{idx}_{sub}", mocap=True)
-            body.add_geom(
-                name=f"tugvis_{idx}_{sub}",
-                type=mujoco.mjtGeom.mjGEOM_MESH,
-                meshname="tug_piece",
-                material="tug_hemp",
-                contype=0,
-                conaffinity=0,
-            )
+        body = parent.worldbody.add_body(name=f"tug_span_{idx}", mocap=True)
+        body.add_geom(
+            name=f"tug_span_{idx}",
+            type=mujoco.mjtGeom.mjGEOM_MESH,
+            meshname="tug_var_5_1",
+            material="tug_hemp",
+            contype=0,
+            conaffinity=0,
+        )
 
     _add_line_geom(parent, "center_line", 0.0, (1.0, 1.0, 1.0, 1.0))
     _add_line_geom(parent, "win_line_red", -win_x, red_rgba)
