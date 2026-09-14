@@ -29,7 +29,7 @@ def tug_model():
 def test_spec_has_ten_robots_140_actuators_18_cords(tug_model) -> None:
     model = tug_model
     assert model.nu == 10 * 14
-    assert model.ntendon == 9 * 2
+    assert model.ntendon == 9
     free_joints = sum(1 for i in range(model.njnt) if model.jnt_type[i] == mujoco.mjtJoint.mjJNT_FREE)
     assert free_joints == 10
 
@@ -37,16 +37,17 @@ def test_spec_has_ten_robots_140_actuators_18_cords(tug_model) -> None:
 def test_all_rope_sites_resolve(tug_model) -> None:
     red, blue = team_prefixes(5)
     for prefix in red + blue:
-        for side in ("left", "right", "chest"):
-            assert mujoco.mj_name2id(
-                tug_model, mujoco.mjtObj.mjOBJ_SITE, f"{prefix}rope_{side}") >= 0
+        assert mujoco.mj_name2id(
+            tug_model, mujoco.mjtObj.mjOBJ_SITE, f"{prefix}rope_hook") >= 0
+        assert mujoco.mj_name2id(
+            tug_model, mujoco.mjtObj.mjOBJ_GEOM, f"{prefix}tug_dring") >= 0
 
 
 def test_hemp_visuals_span_the_chain(tug_model) -> None:
     # 9 spans on mocap bodies + 44 precomputed swept-rope variants shared
     # via geom_dataid swap; physics tendons hidden.
     assert tug_model.nmocap == 9
-    assert tug_model.ntendon == 18
+    assert tug_model.ntendon == 9
     n_variants = sum(
         1 for i in range(tug_model.nmesh)
         if (mujoco.mj_id2name(tug_model, mujoco.mjtObj.mjOBJ_MESH, i) or "").startswith("tug_var_"))

@@ -67,7 +67,8 @@ def reset_round(model, data, rigs, spawns, rng):
         x, quat = spawns[rig.prefix]
         adr = rig.free_qpos_adr
         data.qpos[adr + 0] = x + rng.uniform(-0.002, 0.002)
-        data.qpos[adr + 1] = rng.uniform(-0.002, 0.002)
+        from mjlab_microduck.robot.tug_of_war import SPAWN_Y
+        data.qpos[adr + 1] = SPAWN_Y + rng.uniform(-0.002, 0.002)
         data.qpos[adr + 2] = TRUNK_Z0
         data.qpos[adr + 3:adr + 7] = quat
         data.qpos[rig.joint_qpos_idx] = DEFAULT_POSE
