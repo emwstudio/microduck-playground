@@ -16,6 +16,11 @@ validated with MuJoCo's own collision engine — see
   </tr>
 </table>
 
+The tow-pack STL is a **single boolean-unioned solid** (panel + rails +
+carabiner in one watertight mesh) — it prints as one piece. The sim uses the
+same mesh with a single material; the carabiner's orange is a paint job, not
+a separate part.
+
 ## Files
 
 - `source/cad_rig.py` — waist-band variant (superseded by the saddle);

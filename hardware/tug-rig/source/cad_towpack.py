@@ -82,11 +82,13 @@ def export_both(mesh: trimesh.Trimesh, name: str) -> None:
 
 
 def main() -> None:
-    parts = [rounded_panel(), rail(1.0), rail(-1.0)]
+    parts = [rounded_panel(), rail(1.0), rail(-1.0), carabiner(EYE)]
     pack = trimesh.boolean.union(parts, engine="manifold")
     trimesh.repair.fix_normals(pack)
     export_both(pack, "tug_towpack")
-    export_both(carabiner(EYE), "tug_hook_carabiner")
+    print(f"one-piece pack: {len(pack.vertices)} verts, "
+          f"{len(pack.faces)} faces, watertight={pack.is_watertight}, "
+          f"volume={abs(pack.volume) * 1e3:.1f} cm^3")
     print("pack eye at", EYE.tolist())
 
 
