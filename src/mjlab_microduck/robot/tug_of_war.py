@@ -130,11 +130,63 @@ SAG_PER_SLACK = 0.6       # parabola depth per metre of slack
 SAG_MAX = 0.045
 
 
-# Hemp rope PBR maps: ambientCG Rope001 (CC0, https://ambientcg.com/view?id=Rope001),
-# natural twisted fibre — the same look as the reference tug-of-war video.
+# Rope texture. Spans use our procedural twist tile (soft 3-band diagonal
+# helix, colours measured off the reference video's strand); coils use
+# ambientCG Rope001 (CC0, https://ambientcg.com/view?id=Rope001).
 _ROPE_COLOR = _ROBOT_DIR / "assets" / "rope_hemp_color.png"
 _ROPE_NORMAL = _ROBOT_DIR / "assets" / "rope_hemp_normal.png"
 _ROPE_ROUGHNESS = _ROBOT_DIR / "assets" / "rope_hemp_roughness.png"
+_TWIST_CROWN = np.array([0.93, 0.85, 0.66])
+_TWIST_GROOVE = np.array([0.72, 0.62, 0.44])
+
+
+def _twist_texture(size: int = 256, bands: int = 3) -> tuple[bytes, bytes]:
+    """Seamless diagonal-band twist tile + matching normal map.
+
+    On a cylinder's unwrapped UV a helix is a diagonal line; the tile repeats
+    `bands` soft ridges on the 45-degree diagonal so the rope reads as long-
+    pitch twisted strands, with clean silky shading (no fibre speckle —
+    minification noise was what made previous versions look ragged)."""
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float64)
+    phase = ((xx + yy) / size * bands) % 1.0
+    ridge = 0.5 + 0.5 * np.cos(2.0 * np.pi * phase)          # 1 crown, 0 groove
+    shade = 0.87 + 0.13 * ridge                              # gentle contrast
+    fibre = 0.015 * np.sin(xx * 0.9) + 0.01 * np.sin(yy * 2.3 + xx * 0.2)
+    shade = np.clip(shade + fibre, 0, 1)
+    rgb = shade[..., None] * (_TWIST_GROOVE + (_TWIST_CROWN - _TWIST_GROOVE) * ridge[..., None])
+    rgb = np.clip(rgb * 255, 0, 255).astype(np.uint8)
+
+    eps = 1.0 / size
+    dhdx = (np.roll(ridge, -1, 1) - np.roll(ridge, 1, 1)) / (2 * eps)
+    dhdy = (np.roll(ridge, -1, 0) - np.roll(ridge, 1, 0)) / (2 * eps)
+    strength = 0.002
+    nx, ny = -dhdx * strength, -dhdy * strength
+    nz = np.ones_like(nx)
+    norm = np.sqrt(nx**2 + ny**2 + nz**2)
+    nrm = np.stack([(nx / norm + 1) / 2, (ny / norm + 1) / 2, (nz / norm + 1) / 2], axis=-1)
+    return rgb.tobytes(), (nrm * 255).astype(np.uint8).tobytes()
+
+
+def _add_twist_material(spec: mujoco.MjSpec) -> None:
+    rgb, normal = _twist_texture()
+    tex = spec.add_texture(name="tug_twist_tex")
+    tex.type = mujoco.mjtTexture.mjTEXTURE_2D
+    tex.width, tex.height, tex.nchannel = 256, 256, 3
+    tex.data = rgb
+    ntex = spec.add_texture(name="tug_twist_nrm")
+    ntex.type = mujoco.mjtTexture.mjTEXTURE_2D
+    ntex.width, ntex.height, ntex.nchannel = 256, 256, 3
+    ntex.data = normal
+    mat = spec.add_material(name="tug_twist")
+    mat.rgba = (1.0, 1.0, 1.0, 1.0)   # MuJoCo's default 0.5 grey halves the texture
+    mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = "tug_twist_tex"
+    mat.textures[mujoco.mjtTextureRole.mjTEXROLE_NORMAL] = "tug_twist_nrm"
+    mat.texrepeat = (1.0, 1.0)
+    mat.texuniform = False
+    mat.specular = 0.6
+    mat.shininess = 0.6
+
+
 
 
 def _add_hemp_material(spec: mujoco.MjSpec) -> None:
@@ -145,10 +197,11 @@ def _add_hemp_material(spec: mujoco.MjSpec) -> None:
         tex.type = mujoco.mjtTexture.mjTEXTURE_2D
         tex.file = str(path)
     mat = spec.add_material(name="tug_hemp")
+    mat.rgba = (1.0, 1.0, 1.0, 1.0)   # MuJoCo's default 0.5 grey halves the texture
     mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = "tug_hemp_tex"
     mat.textures[mujoco.mjtTextureRole.mjTEXROLE_NORMAL] = "tug_hemp_nrm"
     mat.textures[mujoco.mjtTextureRole.mjTEXROLE_ROUGHNESS] = "tug_hemp_rgh"
-    mat.texrepeat = (12.0, 1.0)
+    mat.texrepeat = (8.0, 1.0)
     mat.texuniform = True
     mat.specular = 0.35
     mat.shininess = 0.4
@@ -275,12 +328,12 @@ def _twisted_tube_mesh(spec: mujoco.MjSpec, name: str,
         yarn_center = ply_center + yarn_center_r * (np.cos(psi) * u2 + np.sin(psi) * np.cross(tangent, u2))
         out_dir = u2 * 0.7 + w * rng.uniform(-0.5, 0.5) + tangent * rng.uniform(-0.4, 0.4)
         out_dir /= np.linalg.norm(out_dir)
-        length = rng.uniform(0.002, 0.005)
+        length = rng.uniform(0.0015, 0.003)
         root = yarn_center + yarn_tube_r * out_dir
         mid = root + out_dir * length * 0.6 + tangent * rng.uniform(-0.001, 0.001)
         tip = root + out_dir * length
         base = len(verts)
-        for point, radius in ((root, 0.00035), (mid, 0.00022), (tip, 0.00006)):
+        for point, radius in ((root, 0.00025), (mid, 0.00015), (tip, 0.00005)):
             side = np.cross(out_dir, tangent)
             n_side = np.linalg.norm(side)
             side = side / n_side if n_side > 1e-9 else u
@@ -391,6 +444,47 @@ def _local_span_curve(chord: float, sag: float) -> np.ndarray:
     return points
 
 
+SPAN_RADIUS = 0.008
+SPAN_SMOOTH_ALPHA = 16
+
+
+def _sweep_smooth(points: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Smooth cylinder swept along `points` (clean silhouette — the
+    reference rope's twist is texture, not geometry; a 3-ply silhouette
+    aliases into ragged fuzz at video resolution). (verts, normals, uvs, faces)"""
+    n = len(points)
+    tangents = np.gradient(points, axis=0)
+    tangents /= np.linalg.norm(tangents, axis=1, keepdims=True)
+    ref = np.tile(np.array([0.0, 0.0, 1.0]), (n, 1))
+    flip = np.abs((tangents * ref).sum(axis=1)) > 0.9
+    ref[flip] = np.array([1.0, 0.0, 0.0])
+    u = ref - (ref * tangents).sum(axis=1, keepdims=True) * tangents
+    u /= np.linalg.norm(u, axis=1, keepdims=True)
+    w = np.cross(tangents, u)
+    alphas = 2.0 * np.pi * np.arange(SPAN_SMOOTH_ALPHA) / SPAN_SMOOTH_ALPHA
+    cos_a = np.cos(alphas)[None, :, None]
+    sin_a = np.sin(alphas)[None, :, None]
+    normals = cos_a * u[:, None, :] + sin_a * w[:, None, :]      # (n, A, 3)
+    verts = points[:, None, :] + SPAN_RADIUS * normals
+    verts = verts.reshape(-1, 3)
+    normals = normals.reshape(-1, 3)
+    uvs = np.zeros((n * SPAN_SMOOTH_ALPHA, 2))
+    t_frac = np.linspace(0.0, 1.0, n)
+    uvs[:, 0] = np.repeat(t_frac, SPAN_SMOOTH_ALPHA)
+    uvs[:, 1] = np.tile(alphas / (2.0 * np.pi), n)
+    faces = []
+    for i in range(n - 1):
+        for j in range(SPAN_SMOOTH_ALPHA):
+            j2 = (j + 1) % SPAN_SMOOTH_ALPHA
+            a = i * SPAN_SMOOTH_ALPHA + j
+            b = (i + 1) * SPAN_SMOOTH_ALPHA + j
+            c = (i + 1) * SPAN_SMOOTH_ALPHA + j2
+            d = i * SPAN_SMOOTH_ALPHA + j2
+            faces.append((a, b, c))
+            faces.append((a, c, d))
+    return verts, normals, uvs, np.array(faces, dtype=np.int32)
+
+
 def _sweep_twisted(points: np.ndarray, twists: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """3-ply twisted tube swept along `points`: (verts, normals, faces);
     topology/UVs are constant for a given resolution."""
@@ -469,16 +563,16 @@ def _add_tug_lighting(spec: mujoco.MjSpec) -> None:
     spec.visual.quality.shadowsize = 4096
     spec.worldbody.add_light(
         name="tug_key",
-        pos=(0.0, -1.5, 2.0),
-        dir=(0.0, 0.55, -0.84),
+        pos=(0.0, 1.8, 2.0),
+        dir=(0.0, -0.62, -0.78),
         type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL,
         diffuse=(0.9, 0.82, 0.68),
         specular=(0.5, 0.45, 0.35),
     )
     spec.worldbody.add_light(
         name="tug_fill",
-        pos=(0.0, 1.5, 1.0),
-        dir=(0.0, -0.55, -0.84),
+        pos=(0.0, -1.5, 1.0),
+        dir=(0.0, 0.55, -0.84),
         type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL,
         diffuse=(0.25, 0.30, 0.38),
         specular=(0.1, 0.12, 0.15),
@@ -486,18 +580,19 @@ def _add_tug_lighting(spec: mujoco.MjSpec) -> None:
 
 
 def _build_span_variants(spec: mujoco.MjSpec) -> None:
-    uvs = span_uvs().flatten()
+    _add_twist_material(spec)
     for ci, chord in enumerate(CHORD_BINS):
         for si, sag_frac in enumerate(SAG_BINS):
             sag = sag_frac * SAG_MAX
             points = _local_span_curve(float(chord), sag)
-            twists = 2.5 * float(chord) / 0.05
-            verts, normals, faces = _sweep_twisted(points, twists)
+            verts, normals, uvs, faces = _sweep_smooth(points)
+            # Twist pitch ≈ 3.5 rope diameters, measured off the reference.
+            uvs[:, 0] *= float(chord) / (3.5 * 2.0 * SPAN_RADIUS)
             mesh = spec.add_mesh(name=f"tug_var_{ci}_{si}")
             mesh.uservert = verts.flatten().astype(np.float32)
             mesh.usernormal = normals.flatten().astype(np.float32)
             mesh.userface = faces.flatten()
-            mesh.usertexcoord = uvs
+            mesh.usertexcoord = uvs.flatten().astype(np.float32)
 
 
 def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
@@ -595,7 +690,7 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
     _twisted_tube_mesh(parent, "tug_wrap", _wrap_path(np.random.default_rng(20260914)),
                        t_segments=66, alpha_segments=6,
                        twists=WRAP_TURNS * ROPE_PLY_TWISTS_PER_TURN, uv_repeats=14.0,
-                       sub_fibers=5, flyaway=260)
+                       sub_fibers=5, flyaway=110)
     _add_waist_wraps(parent, n_per_team)
     _build_span_variants(parent)
     n_strands = 2 * n_per_team - 1
@@ -605,7 +700,7 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
             name=f"tug_span_{idx}",
             type=mujoco.mjtGeom.mjGEOM_MESH,
             meshname="tug_var_5_1",
-            material="tug_hemp",
+            material="tug_twist",
             contype=0,
             conaffinity=0,
         )
