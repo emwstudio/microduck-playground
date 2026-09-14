@@ -388,6 +388,10 @@ def _add_rig_materials(spec: mujoco.MjSpec) -> None:
     webbing.rgba = (0.16, 0.16, 0.18, 1.0)   # dark nylon harness
     webbing.specular = 0.15
     webbing.shininess = 0.1
+    paint = spec.add_material(name="tug_frame_paint")
+    paint.rgba = (0.62, 0.65, 0.70, 1.0)   # satin-machined frame, reads on dark harness
+    paint.specular = 0.8
+    paint.shininess = 0.6
     steel = spec.add_material(name="tug_steel")
     steel.rgba = (0.68, 0.70, 0.74, 1.0)
     steel.specular = 0.9
@@ -400,7 +404,7 @@ def _add_rig_materials(spec: mujoco.MjSpec) -> None:
 
 def _load_hook_stls(spec: mujoco.MjSpec) -> None:
     """Parametric rig parts from hardware/tug-rig (STL, trunk-local)."""
-    for mesh_name, filename in (("tug_hook_steel_stl", "tug_hook_steel.stl"),
+    for mesh_name, filename in (("tug_hook_steel_stl", "tug_frame.stl"),
                                 ("tug_hook_carabiner_stl", "tug_hook_carabiner.stl"),
                                 ("tug_chest_carabiner_stl", "tug_chest_carabiner.stl")):
         spec.add_mesh(name=mesh_name, file=str(_ROBOT_DIR / "assets" / filename))
@@ -455,7 +459,7 @@ def _add_harness_rings(spec: mujoco.MjSpec, n_per_team: int) -> None:
             name=f"{prefix}tug_hook_steel",
             type=mujoco.mjtGeom.mjGEOM_MESH,
             meshname="tug_hook_steel_stl",
-            material="tug_steel",
+            material="tug_frame_paint",
             contype=0,
             conaffinity=0,
             density=0.0,
