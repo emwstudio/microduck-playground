@@ -196,46 +196,108 @@ def _straight_path(length: float):
 
 def _twisted_tube_mesh(spec: mujoco.MjSpec, name: str,
                        path, t_segments: int, alpha_segments: int,
-                       twists: float, uv_repeats: float) -> None:
-    """3-ply twisted rope following an arbitrary path (inline mesh with UVs).
+                       twists: float, uv_repeats: float,
+                       sub_fibers: int = 5, flyaway: int = 0,
+                       seed: int = 42) -> None:
+    """Two-level twisted rope following an arbitrary path (inline mesh, UVs).
 
-    Each ply is a tube whose centreline itself spirals around the path —
-    geometry-level twist, no texture trickery required for the silhouette."""
+    Level 1: three plies spiral around the path. Level 2 (sub_fibers > 1):
+    each ply is itself a bundle of thinner yarns spiralling inside the ply
+    tube — the same construction as real 3-ply hemp. `flyaway` bakes that
+    many short fibre spikes into the mesh, sticking a few mm off the yarns:
+    the fuzzy halo of real manila rope."""
+    rng = np.random.default_rng(seed)
     verts: list[tuple[float, float, float]] = []
     uvs: list[tuple[float, float]] = []
     faces: list[tuple[int, int, int]] = []
     eps = 1e-3
+
+    def frame(t: float):
+        center = path(t)
+        tangent = path(min(1.0, t + eps)) - path(max(0.0, t - eps))
+        tangent /= np.linalg.norm(tangent)
+        ref = np.array([0.0, 0.0, 1.0])
+        if abs(np.dot(tangent, ref)) > 0.9:
+            ref = np.array([1.0, 0.0, 0.0])
+        u = ref - np.dot(ref, tangent) * tangent
+        u /= np.linalg.norm(u)
+        return center, tangent, u, np.cross(tangent, u)
+
+    yarns_per_ply = max(1, sub_fibers)
+    yarn_center_r = ROPE_PLY_TUBE_R * 0.55 if yarns_per_ply > 1 else 0.0
+    yarn_tube_r = ROPE_PLY_TUBE_R * (0.5 if yarns_per_ply > 1 else 1.0)
+    sub_twists = twists * 3.0   # yarns counter-twist faster than plies
+
     for k in range(3):
+        for f in range(yarns_per_ply):
+            base = len(verts)
+            for i in range(t_segments):
+                t = i / (t_segments - 1)
+                center, tangent, u, w = frame(t)
+                phi = 2.0 * np.pi * (k / 3 + twists * t)
+                u2 = np.cos(phi) * u + np.sin(phi) * w
+                ply_center = center + ROPE_PLY_CENTER_R * u2
+                yarn_center = ply_center
+                if yarns_per_ply > 1:
+                    psi = 2.0 * np.pi * (f / yarns_per_ply + sub_twists * t)
+                    yarn_center = ply_center + yarn_center_r * (np.cos(psi) * u2 + np.sin(psi) * np.cross(tangent, u2))
+                yarn_out = yarn_center - ply_center
+                n = np.linalg.norm(yarn_out)
+                yarn_out = yarn_out / n if n > 1e-9 else u2
+                for j in range(alpha_segments):
+                    alpha = 2.0 * np.pi * j / alpha_segments
+                    point = yarn_center + yarn_tube_r * (
+                        np.cos(alpha) * yarn_out + np.sin(alpha) * np.cross(tangent, yarn_out))
+                    verts.append(tuple(point))
+                    uvs.append((t * uv_repeats, (j / alpha_segments + f / yarns_per_ply) % 1.0))
+            for i in range(t_segments - 1):
+                for j in range(alpha_segments):
+                    j2 = (j + 1) % alpha_segments
+                    a = base + i * alpha_segments + j
+                    b = base + (i + 1) * alpha_segments + j
+                    c = base + (i + 1) * alpha_segments + j2
+                    d = base + i * alpha_segments + j2
+                    faces.append((a, b, c))
+                    faces.append((a, c, d))
+
+    for _ in range(flyaway):
+        # A tapered 3-segment fibre sticking 2-5 mm off a random yarn.
+        t = rng.uniform(0.02, 0.98)
+        k = rng.integers(0, 3)
+        f = rng.integers(0, yarns_per_ply)
+        center, tangent, u, w = frame(t)
+        phi = 2.0 * np.pi * (k / 3 + twists * t)
+        u2 = np.cos(phi) * u + np.sin(phi) * w
+        ply_center = center + ROPE_PLY_CENTER_R * u2
+        psi = 2.0 * np.pi * (f / yarns_per_ply + sub_twists * t)
+        yarn_center = ply_center + yarn_center_r * (np.cos(psi) * u2 + np.sin(psi) * np.cross(tangent, u2))
+        out_dir = u2 * 0.7 + w * rng.uniform(-0.5, 0.5) + tangent * rng.uniform(-0.4, 0.4)
+        out_dir /= np.linalg.norm(out_dir)
+        length = rng.uniform(0.002, 0.005)
+        root = yarn_center + yarn_tube_r * out_dir
+        mid = root + out_dir * length * 0.6 + tangent * rng.uniform(-0.001, 0.001)
+        tip = root + out_dir * length
         base = len(verts)
-        for i in range(t_segments):
-            t = i / (t_segments - 1)
-            phi = 2.0 * np.pi * (k / 3 + twists * t)
-            center = path(t)
-            tangent = path(min(1.0, t + eps)) - path(max(0.0, t - eps))
-            tangent /= np.linalg.norm(tangent)
-            ref = np.array([0.0, 0.0, 1.0])
-            if abs(np.dot(tangent, ref)) > 0.9:
-                ref = np.array([1.0, 0.0, 0.0])
-            u = ref - np.dot(ref, tangent) * tangent
-            u /= np.linalg.norm(u)
-            w = np.cross(tangent, u)
-            offset = ROPE_PLY_CENTER_R * (np.cos(phi) * u + np.sin(phi) * w)
-            u2 = np.cos(phi) * u + np.sin(phi) * w
-            for j in range(alpha_segments):
-                alpha = 2.0 * np.pi * j / alpha_segments
-                point = center + offset + ROPE_PLY_TUBE_R * (
-                    np.cos(alpha) * u2 + np.sin(alpha) * np.cross(tangent, u2))
-                verts.append(tuple(point))
-                uvs.append((t * uv_repeats, (j / alpha_segments + k / 3) % 1.0))
-        for i in range(t_segments - 1):
-            for j in range(alpha_segments):
-                j2 = (j + 1) % alpha_segments
-                a = base + i * alpha_segments + j
-                b = base + (i + 1) * alpha_segments + j
-                c = base + (i + 1) * alpha_segments + j2
-                d = base + i * alpha_segments + j2
+        for point, radius in ((root, 0.00035), (mid, 0.00022), (tip, 0.00006)):
+            side = np.cross(out_dir, tangent)
+            n_side = np.linalg.norm(side)
+            side = side / n_side if n_side > 1e-9 else u
+            for j in range(4):
+                ang = np.pi / 2 * j
+                verts.append(tuple(point + radius * (np.cos(ang) * side + np.sin(ang) * np.cross(out_dir, side))))
+                uvs.append((t * uv_repeats, 0.5))
+        for ring in range(2):
+            for j in range(4):
+                j2 = (j + 1) % 4
+                a = base + ring * 4 + j
+                b = base + ring * 4 + j2
+                c = base + (ring + 1) * 4 + j2
+                d = base + (ring + 1) * 4 + j
                 faces.append((a, b, c))
                 faces.append((a, c, d))
+        for j in range(4):  # tip cap fan
+            faces.append((base + 8 + j, base + 8 + (j + 1) % 4, base + 8 + (j + 2) % 4))
+
     mesh = spec.add_mesh(name=name)
     mesh.uservert = np.array(verts, dtype=np.float32).flatten()
     mesh.userface = np.array(faces, dtype=np.int32).flatten()
@@ -394,10 +456,12 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
 
     _add_hemp_material(parent)
     _twisted_tube_mesh(parent, "tug_wrap", _wrap_path(np.random.default_rng(20260914)),
-                       t_segments=66, alpha_segments=7,
-                       twists=WRAP_TURNS * ROPE_PLY_TWISTS_PER_TURN, uv_repeats=14.0)
+                       t_segments=66, alpha_segments=6,
+                       twists=WRAP_TURNS * ROPE_PLY_TWISTS_PER_TURN, uv_repeats=14.0,
+                       sub_fibers=5, flyaway=260)
     _twisted_tube_mesh(parent, "tug_piece", _straight_path(SPAN_PIECE_LENGTH),
-                       t_segments=30, alpha_segments=7, twists=2.5, uv_repeats=2.0)
+                       t_segments=30, alpha_segments=6, twists=2.5, uv_repeats=2.0,
+                       sub_fibers=5, flyaway=40)
     _add_waist_wraps(parent, n_per_team)
     n_strands = 2 * n_per_team - 1
     for idx in range(n_strands):
