@@ -1,0 +1,147 @@
+{
+  "saddle": "tug_towpack.stl",
+  "thresholds_mm": {
+    "blocked": 1.0,
+    "tight": 3.0
+  },
+  "sweeps": {
+    "per_joint/left_hip_yaw": {
+      "samples": 10,
+      "blocked": 10,
+      "tight": 0,
+      "blocked_pct": 100.0,
+      "already_colliding_excluded": 0,
+      "worst_clearance_mm": 0.0
+    },
+    "per_joint/left_hip_roll": {
+      "samples": 10,
+      "blocked": 10,
+      "tight": 0,
+      "blocked_pct": 100.0,
+      "already_colliding_excluded": 0,
+      "worst_clearance_mm": 0.0
+    },
+    "per_joint/left_hip_pitch": {
+      "samples": 10,
+      "blocked": 10,
+      "tight": 0,
+      "blocked_pct": 100.0,
+      "already_colliding_excluded": 0,
+      "worst_clearance_mm": 0.0
+    },
+    "per_joint/left_knee": {
+      "samples": 10,
+      "blocked": 10,
+      "tight": 0,
+      "blocked_pct": 100.0,
+      "already_colliding_excluded": 0,
+      "worst_clearance_mm": 0.0
+    },
+    "per_joint/left_ankle": {
+      "samples": 10,
+      "blocked": 10,
+      "tight": 0,
+      "blocked_pct": 100.0,
+      "already_colliding_excluded": 0,
+      "worst_clearance_mm": 0.0
+    },
+    "per_joint/right_hip_yaw": {
+      "samples": 10,
+      "blocked": 10,
+      "tight": 0,
+      "blocked_pct": 100.0,
+      "already_colliding_excluded": 0,
+      "worst_clearance_mm": 0.0
+    },
+    "per_joint/right_hip_roll": {
+      "samples": 10,
+      "blocked": 10,
+      "tight": 0,
+      "blocked_pct": 100.0,
+      "already_colliding_excluded": 0,
+      "worst_clearance_mm": 0.0
+    },
+    "per_joint/right_hip_pitch": {
+      "samples": 10,
+      "blocked": 10,
+      "tight": 0,
+      "blocked_pct": 100.0,
+      "already_colliding_excluded": 0,
+      "worst_clearance_mm": 0.0
+    },
+    "per_joint/right_knee": {
+      "samples": 10,
+      "blocked": 10,
+      "tight": 0,
+      "blocked_pct": 100.0,
+      "already_colliding_excluded": 0,
+      "worst_clearance_mm": 0.0
+    },
+    "per_joint/right_ankle": {
+      "samples": 10,
+      "blocked": 10,
+      "tight": 0,
+      "blocked_pct": 100.0,
+      "already_colliding_excluded": 0,
+      "worst_clearance_mm": 0.0
+    },
+    "per_joint/neck_pitch": {
+      "samples": 10,
+      "blocked": 10,
+      "tight": 0,
+      "blocked_pct": 100.0,
+      "already_colliding_excluded": 0,
+      "worst_clearance_mm": 0.0
+    },
+    "per_joint/head_pitch": {
+      "samples": 10,
+      "blocked": 10,
+      "tight": 0,
+      "blocked_pct": 100.0,
+      "already_colliding_excluded": 0,
+      "worst_clearance_mm": 0.0
+    },
+    "per_joint/head_yaw": {
+      "samples": 10,
+      "blocked": 10,
+      "tight": 0,
+      "blocked_pct": 100.0,
+      "already_colliding_excluded": 0,
+      "worst_clearance_mm": 0.0
+    },
+    "per_joint/head_roll": {
+      "samples": 10,
+      "blocked": 10,
+      "tight": 0,
+      "blocked_pct": 100.0,
+      "already_colliding_excluded": 0,
+      "worst_clearance_mm": 0.0
+    },
+    "lhs_legspace_400": {
+      "samples": 400,
+      "blocked": 400,
+      "tight": 0,
+      "blocked_pct": 100.0,
+      "already_colliding_excluded": 0,
+      "worst_clearance_mm": 0.0
+    },
+    "lhs_tug_envelope": {
+      "samples": 30,
+      "blocked": 30,
+      "tight": 0,
+      "blocked_pct": 100.0,
+      "already_colliding_excluded": 0,
+      "worst_clearance_mm": 0.0
+    }
+  },
+  "hip_pitch_envelope": [
+    -0.5,
+    0.35
+  ],
+  "hip_roll_envelope": 0.4,
+  "verdict": {
+    "blocked_total": 570,
+    "tight_total": 0,
+    "note": "Geometric proximity only. No insertion-force, pull-out, wear or load testing performed; 3D-print validation still required."
+  }
+}
