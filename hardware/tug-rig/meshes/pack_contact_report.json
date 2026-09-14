@@ -1,0 +1,142 @@
+{
+  "pack": "tug_towpack.stl",
+  "margin_mm": 3.0,
+  "envelope": {
+    "hip_pitch": [
+      -0.5,
+      0.35
+    ],
+    "hip_roll_abs": 0.4
+  },
+  "sweeps": {
+    "per_joint/left_hip_yaw": {
+      "samples": 9,
+      "mounting": 0,
+      "blocked": 0,
+      "tight": 0,
+      "blocked_poses": 0,
+      "blocked_pose_pct": 0.0
+    },
+    "per_joint/left_hip_roll": {
+      "samples": 9,
+      "mounting": 0,
+      "blocked": 0,
+      "tight": 0,
+      "blocked_poses": 0,
+      "blocked_pose_pct": 0.0
+    },
+    "per_joint/left_hip_pitch": {
+      "samples": 9,
+      "mounting": 0,
+      "blocked": 1,
+      "tight": 2,
+      "blocked_poses": 1,
+      "blocked_pose_pct": 11.1
+    },
+    "per_joint/left_knee": {
+      "samples": 9,
+      "mounting": 0,
+      "blocked": 0,
+      "tight": 0,
+      "blocked_poses": 0,
+      "blocked_pose_pct": 0.0
+    },
+    "per_joint/left_ankle": {
+      "samples": 9,
+      "mounting": 0,
+      "blocked": 0,
+      "tight": 0,
+      "blocked_poses": 0,
+      "blocked_pose_pct": 0.0
+    },
+    "per_joint/right_hip_yaw": {
+      "samples": 9,
+      "mounting": 0,
+      "blocked": 0,
+      "tight": 0,
+      "blocked_poses": 0,
+      "blocked_pose_pct": 0.0
+    },
+    "per_joint/right_hip_roll": {
+      "samples": 9,
+      "mounting": 0,
+      "blocked": 1,
+      "tight": 2,
+      "blocked_poses": 1,
+      "blocked_pose_pct": 11.1
+    },
+    "per_joint/right_hip_pitch": {
+      "samples": 9,
+      "mounting": 0,
+      "blocked": 7,
+      "tight": 0,
+      "blocked_poses": 4,
+      "blocked_pose_pct": 44.4
+    },
+    "per_joint/right_knee": {
+      "samples": 9,
+      "mounting": 0,
+      "blocked": 0,
+      "tight": 0,
+      "blocked_poses": 0,
+      "blocked_pose_pct": 0.0
+    },
+    "per_joint/right_ankle": {
+      "samples": 9,
+      "mounting": 0,
+      "blocked": 0,
+      "tight": 0,
+      "blocked_poses": 0,
+      "blocked_pose_pct": 0.0
+    },
+    "per_joint/neck_pitch": {
+      "samples": 9,
+      "mounting": 0,
+      "blocked": 0,
+      "tight": 0,
+      "blocked_poses": 0,
+      "blocked_pose_pct": 0.0
+    },
+    "per_joint/head_pitch": {
+      "samples": 9,
+      "mounting": 0,
+      "blocked": 0,
+      "tight": 0,
+      "blocked_poses": 0,
+      "blocked_pose_pct": 0.0
+    },
+    "per_joint/head_yaw": {
+      "samples": 9,
+      "mounting": 0,
+      "blocked": 0,
+      "tight": 0,
+      "blocked_poses": 0,
+      "blocked_pose_pct": 0.0
+    },
+    "per_joint/head_roll": {
+      "samples": 9,
+      "mounting": 0,
+      "blocked": 0,
+      "tight": 0,
+      "blocked_poses": 0,
+      "blocked_pose_pct": 0.0
+    },
+    "lhs_legspace_400": {
+      "samples": 400,
+      "mounting": 0,
+      "blocked": 192,
+      "tight": 49,
+      "blocked_poses": 112,
+      "blocked_pose_pct": 28.0
+    },
+    "lhs_tug_envelope": {
+      "samples": 30,
+      "mounting": 0,
+      "blocked": 12,
+      "tight": 2,
+      "blocked_poses": 8,
+      "blocked_pose_pct": 26.7
+    }
+  },
+  "note": "MuJoCo-native contacts. MOUNTING counts pack rail-feet vs trunk_base \u2014 the intended attachment interface, not a fault. No insertion-force, pull-out, wear or load testing performed."
+}
