@@ -42,13 +42,27 @@ def test_all_rope_sites_resolve(tug_model) -> None:
 
 
 def test_hemp_visuals_cover_cords_and_belts(tug_model) -> None:
-    # 9 links x 2 strands + 10 ducks x 2 belt segments, physics tendons hidden.
-    assert tug_model.nmocap == 9 * 2 + 10 * 2
+    # 18 cords x 4 sag sub-segments of mocap; physics tendons hidden.
+    assert tug_model.nmocap == 18 * 4
     assert tug_model.ntendon == 18
     visuals = resolve_rope_visuals(tug_model, 5)
-    assert len(visuals) == 38
+    assert len(visuals) == 72
     assert all(v.body_id >= 0 and v.geom_id >= 0 for v in visuals)
     assert all(v.site_a_id >= 0 and v.site_b_id >= 0 for v in visuals)
+
+
+def test_every_trunk_wears_two_coils(tug_model) -> None:
+    red, blue = team_prefixes(5)
+    for prefix in red + blue:
+        geom_id = mujoco.mj_name2id(
+            tug_model, mujoco.mjtObj.mjOBJ_GEOM, f"{prefix}tug_coil_0")
+        assert geom_id >= 0
+        trunk = mujoco.mj_name2id(
+            tug_model, mujoco.mjtObj.mjOBJ_BODY, f"{prefix}trunk_base")
+        count = sum(1 for i in range(tug_model.ngeom)
+                    if tug_model.geom_bodyid[i] == trunk
+                    and (mujoco.mj_id2name(tug_model, mujoco.mjtObj.mjOBJ_GEOM, i) or "").startswith(f"{prefix}tug_coil_"))
+        assert count == 2
 
 
 def test_team_shell_colors_differ(tug_model) -> None:

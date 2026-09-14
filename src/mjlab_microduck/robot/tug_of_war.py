@@ -54,7 +54,7 @@ ROPE_RGBA = (0.92, 0.87, 0.70, 1.0)
 ROPE_SITE_Y = 0.052
 ROPE_SITE_Z = 0.035
 ROPE_CHEST_X = 0.022
-ROPE_RADIUS = 0.0035
+ROPE_RADIUS = 0.005
 
 DUCK_SPACING = 0.24         # trunk-to-trunk between teammates; duck x-extent is 0.21 m, tighter collides
 CENTER_GAP = 0.30           # trunk distance between the two inner ducks (tails face center)
@@ -127,42 +127,145 @@ def _link_side_pairs(pa: str, pb: str, red: list[str]) -> tuple[tuple[str, str],
         else (("left", "right"), ("right", "left"))
 
 
-def rope_visual_segments(n_per_team: int) -> list[tuple[str, str]]:
-    """Site-name pairs the hemp mocap cylinders span: every physics cord plus
-    a per-duck belt (left → chest → right) that wraps the rope around each
-    torso. Order matches the tugvis_* bodies in build_tug_spec."""
+def rope_visual_segments(n_per_team: int, spacing: float = DUCK_SPACING,
+                         gap: float = CENTER_GAP) -> list[tuple[str, str, float]]:
+    """(site_a, site_b, nominal_length) per physics cord — the hemp mocap
+    strands span these, with sag computed from slack vs nominal. Order
+    matches the tugvis_* body groups in build_tug_spec."""
     red, blue = team_prefixes(n_per_team)
     chain = list(reversed(red)) + blue
-    segments: list[tuple[str, str]] = []
+    segments: list[tuple[str, str, float]] = []
     for pa, pb in zip(chain[:-1], chain[1:]):
+        nominal = gap if pa == red[0] else spacing
         for side_a, side_b in _link_side_pairs(pa, pb, red):
-            segments.append((f"{pa}rope_{side_a}", f"{pb}rope_{side_b}"))
-    for prefix in red + blue:
-        segments.append((f"{prefix}rope_left", f"{prefix}rope_chest"))
-        segments.append((f"{prefix}rope_chest", f"{prefix}rope_right"))
+            segments.append((f"{pa}rope_{side_a}", f"{pb}rope_{side_b}", nominal))
     return segments
 
 
-def _hemp_rgba_texture(size: int = 64) -> bytes:
-    """Procedural twisted-hemp tile: diagonal light/dark strand bands plus
-    fibre noise. Tiles seamlessly along the cylinder."""
-    yy, xx = np.mgrid[0:size, 0:size]
-    strand = ((xx + yy) % 16) < 8
-    base = np.where(strand, 0.72, 0.52)[..., None] * np.array([1.0, 0.88, 0.66])
-    fibre = np.random.default_rng(7).normal(0.0, 0.05, (size, size, 1))
-    rgb = np.clip((base + fibre) * 255, 0, 255).astype(np.uint8)
-    return rgb.tobytes()
+SAG_SUBSEGMENTS = 4       # mocap cylinders per cord
+SAG_PER_SLACK = 0.6       # parabola depth per metre of slack
+SAG_MAX = 0.045
+
+
+def _hemp_textures(size: int = 128) -> tuple[bytes, bytes]:
+    """Procedural 3-ply twisted-rope tiles: color with per-strand cylindrical
+    shading + groove shadows + fibre noise, and a matching tangent-space
+    normal map derived from the strand height profile."""
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float64)
+    diag = (xx + yy) / size                      # 45° direction, 0..2
+    phase = (diag * 3.0) % 1.0                   # 3 strands per tile
+    height = np.cos(2.0 * np.pi * phase)         # strand crown/groove profile
+    fibre = np.random.default_rng(7).normal(0.0, 0.06, (size, size))
+    fibre += 0.05 * np.sin(xx * 2.4 + yy * 0.3)  # along-strand fibre streaks
+    shade = 0.55 + 0.35 * height + fibre
+    base = np.array([0.78, 0.63, 0.42])          # hemp beige, deepened
+    rgb = np.clip(shade[..., None] * base * 255, 0, 255).astype(np.uint8)
+
+    eps = 1.0 / size
+    dhdx = (np.roll(height, -1, axis=1) - np.roll(height, 1, axis=1)) / (2 * eps)
+    dhdy = (np.roll(height, -1, axis=0) - np.roll(height, 1, axis=0)) / (2 * eps)
+    strength = 0.012
+    nx, ny = -dhdx * strength, -dhdy * strength
+    nz = np.ones_like(nx)
+    norm = np.sqrt(nx**2 + ny**2 + nz**2)
+    nrm = np.stack([(nx / norm + 1) / 2, (ny / norm + 1) / 2, (nz / norm + 1) / 2], axis=-1)
+    nrm = (nrm * 255).astype(np.uint8)
+    return rgb.tobytes(), nrm.tobytes()
 
 
 def _add_hemp_material(spec: mujoco.MjSpec) -> None:
+    rgb, normal = _hemp_textures()
     tex = spec.add_texture(name="tug_hemp_tex")
     tex.type = mujoco.mjtTexture.mjTEXTURE_2D
-    tex.width, tex.height, tex.nchannel = 64, 64, 3
-    tex.data = _hemp_rgba_texture(64)
+    tex.width, tex.height, tex.nchannel = 128, 128, 3
+    tex.data = rgb
+    ntex = spec.add_texture(name="tug_hemp_nrm")
+    ntex.type = mujoco.mjtTexture.mjTEXTURE_2D
+    ntex.width, ntex.height, ntex.nchannel = 128, 128, 3
+    ntex.data = normal
     mat = spec.add_material(name="tug_hemp")
     mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = "tug_hemp_tex"
-    mat.texrepeat = (6.0, 1.0)
+    mat.textures[mujoco.mjtTextureRole.mjTEXROLE_NORMAL] = "tug_hemp_nrm"
+    mat.texrepeat = (10.0, 1.0)
     mat.texuniform = True
+
+
+def _twisted_coil_mesh(spec: mujoco.MjSpec, name: str = "tug_coil",
+                       theta_segments: int = 44, alpha_segments: int = 7,
+                       twists: int = 11) -> None:
+    """3-ply twisted rope bent into a waist coil, as an inline mesh.
+
+    Baked in the xy plane with major radii (x 0.69, y 1.0) and unit scale —
+    geoms scale it uniformly to ROPE_COIL_RADIUS, giving an ellipse that
+    hugs the torso (half-width y ~0.052 > depth x ~0.035)."""
+    n_strands = 3
+    strand_center_r = 0.15    # strand centreline distance from coil centreline
+    strand_tube_r = 0.095     # each ply's tube radius
+    verts: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int]] = []
+    for k in range(n_strands):
+        base = len(verts)
+        for i in range(theta_segments):
+            theta = 2.0 * np.pi * i / theta_segments
+            e_r = np.array([0.69 * np.cos(theta), np.sin(theta), 0.0])
+            e_r /= np.linalg.norm(e_r)
+            e_z = np.array([0.0, 0.0, 1.0])
+            phi = 2.0 * np.pi * (k / n_strands + twists * theta / (2.0 * np.pi))
+            center = (np.array([0.69 * np.cos(theta), np.sin(theta), 0.0])
+                      + strand_center_r * (np.cos(phi) * e_r + np.sin(phi) * e_z))
+            # Strand tangent (finite difference) and a stable tube frame.
+            d_theta = 1e-3
+            theta2 = theta + d_theta
+            phi2 = 2.0 * np.pi * (k / n_strands + twists * theta2 / (2.0 * np.pi))
+            e_r2 = np.array([0.69 * np.cos(theta2), np.sin(theta2), 0.0])
+            e_r2 /= np.linalg.norm(e_r2)
+            center2 = (np.array([0.69 * np.cos(theta2), np.sin(theta2), 0.0])
+                       + strand_center_r * (np.cos(phi2) * e_r2 + np.sin(phi2) * e_z))
+            tangent = (center2 - center) / d_theta
+            tangent /= np.linalg.norm(tangent)
+            u = center - np.array([0.69 * np.cos(theta), np.sin(theta), 0.0])
+            u /= np.linalg.norm(u)
+            w = np.cross(tangent, u)
+            w /= np.linalg.norm(w)
+            for j in range(alpha_segments):
+                alpha = 2.0 * np.pi * j / alpha_segments
+                point = center + strand_tube_r * (np.cos(alpha) * u + np.sin(alpha) * w)
+                verts.append(tuple(point))
+        for i in range(theta_segments):
+            i2 = (i + 1) % theta_segments
+            for j in range(alpha_segments):
+                j2 = (j + 1) % alpha_segments
+                a = base + i * alpha_segments + j
+                b = base + i2 * alpha_segments + j
+                c = base + i2 * alpha_segments + j2
+                d = base + i * alpha_segments + j2
+                faces.append((a, b, c))
+                faces.append((a, c, d))
+    mesh = spec.add_mesh(name=name)
+    mesh.scale = (ROPE_COIL_RADIUS, ROPE_COIL_RADIUS, ROPE_COIL_RADIUS)
+    mesh.uservert = np.array(verts, dtype=np.float32).flatten()
+    mesh.userface = np.array(faces, dtype=np.int32).flatten()
+
+
+ROPE_COIL_RADIUS = 0.055    # geom scale for the baked unit coil
+ROPE_COIL_ZS = (0.026, 0.044)  # two wraps around the waist
+
+
+def _add_waist_coils(spec: mujoco.MjSpec, n_per_team: int) -> None:
+    red, blue = team_prefixes(n_per_team)
+    for prefix in red + blue:
+        trunk = _find_body(spec, f"{prefix}trunk_base")
+        for zi, z in enumerate(ROPE_COIL_ZS):
+            trunk.add_geom(
+                name=f"{prefix}tug_coil_{zi}",
+                type=mujoco.mjtGeom.mjGEOM_MESH,
+                meshname="tug_coil",
+                material="tug_hemp",
+                pos=(0.0, 0.0, z),
+                contype=0,
+                conaffinity=0,
+                density=0.0,   # pure visual — no added mass or inertia
+            )
 
 
 @dataclass
@@ -171,36 +274,51 @@ class RopeVisual:
     geom_id: int
     site_a_id: int
     site_b_id: int
+    nominal: float
+    fraction: float   # sub-segment start fraction along the cord, 0..1
 
 
 def resolve_rope_visuals(model: mujoco.MjModel, n_per_team: int) -> list[RopeVisual]:
     segments = rope_visual_segments(n_per_team)
     visuals = []
-    for idx, (site_a, site_b) in enumerate(segments):
-        body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"tugvis_{idx}")
-        geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"tugvis_{idx}")
-        visuals.append(RopeVisual(
-            body_id=body_id,
-            geom_id=geom_id,
-            site_a_id=mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, site_a),
-            site_b_id=mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, site_b),
-        ))
+    for idx, (site_a, site_b, nominal) in enumerate(segments):
+        for sub in range(SAG_SUBSEGMENTS):
+            body_id = mujoco.mj_name2id(
+                model, mujoco.mjtObj.mjOBJ_BODY, f"tugvis_{idx}_{sub}")
+            geom_id = mujoco.mj_name2id(
+                model, mujoco.mjtObj.mjOBJ_GEOM, f"tugvis_{idx}_{sub}")
+            visuals.append(RopeVisual(
+                body_id=body_id,
+                geom_id=geom_id,
+                site_a_id=mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, site_a),
+                site_b_id=mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, site_b),
+                nominal=nominal,
+                fraction=sub / SAG_SUBSEGMENTS,
+            ))
     return visuals
 
 
 def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
                         visuals: list[RopeVisual]) -> None:
-    """Move every hemp cylinder onto its site-to-site segment (per frame)."""
+    """Move every hemp sub-segment onto its sagging cord curve (per frame)."""
     quat = np.zeros(4)
     for vis in visuals:
         p0 = data.site_xpos[vis.site_a_id]
         p1 = data.site_xpos[vis.site_b_id]
-        direction = p1 - p0
+        chord = float(np.linalg.norm(p1 - p0))
+        slack = max(0.0, vis.nominal - chord)
+        sag = min(SAG_MAX, SAG_PER_SLACK * slack + 0.002)
+        t0, t1 = vis.fraction, vis.fraction + 1.0 / SAG_SUBSEGMENTS
+        pa = p0 + (p1 - p0) * t0
+        pb = p0 + (p1 - p0) * t1
+        pa[2] -= 4.0 * sag * t0 * (1.0 - t0)
+        pb[2] -= 4.0 * sag * t1 * (1.0 - t1)
+        direction = pb - pa
         length = float(np.linalg.norm(direction))
         if length < 1e-6:
             continue
         mocap_id = model.body_mocapid[vis.body_id]
-        data.mocap_pos[mocap_id] = (p0 + p1) / 2.0
+        data.mocap_pos[mocap_id] = (pa + pb) / 2.0
         mujoco.mju_quatZ2Vec(quat, direction / length)
         data.mocap_quat[mocap_id] = quat
         model.geom_size[vis.geom_id][1] = length / 2.0
@@ -259,16 +377,19 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
             cord.wrap_site(f"{pb}rope_{side_b}")
 
     _add_hemp_material(parent)
+    _twisted_coil_mesh(parent)
+    _add_waist_coils(parent, n_per_team)
     for idx in range(len(rope_visual_segments(n_per_team))):
-        body = parent.worldbody.add_body(name=f"tugvis_{idx}", mocap=True)
-        body.add_geom(
-            name=f"tugvis_{idx}",
-            type=mujoco.mjtGeom.mjGEOM_CYLINDER,
-            size=(ROPE_RADIUS, 0.1, 0.0),
-            material="tug_hemp",
-            contype=0,
-            conaffinity=0,
-        )
+        for sub in range(SAG_SUBSEGMENTS):
+            body = parent.worldbody.add_body(name=f"tugvis_{idx}_{sub}", mocap=True)
+            body.add_geom(
+                name=f"tugvis_{idx}_{sub}",
+                type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                size=(ROPE_RADIUS, 0.1, 0.0),
+                material="tug_hemp",
+                contype=0,
+                conaffinity=0,
+            )
 
     _add_line_geom(parent, "center_line", 0.0, (1.0, 1.0, 1.0, 1.0))
     _add_line_geom(parent, "win_line_red", -win_x, red_rgba)
