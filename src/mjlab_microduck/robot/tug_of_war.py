@@ -52,7 +52,7 @@ ROPE_RGBA = (0.92, 0.87, 0.70, 1.0)
 # face ~x+0.015, mid-torso z~0.035) — the rope visibly hugs the body instead
 # of floating beside it.
 ROPE_SITE_Y = 0.052
-ROPE_SITE_Z = 0.035
+ROPE_SITE_Z = 0.017   # belly height, inside the visual wrap band
 ROPE_CHEST_X = 0.022
 
 DUCK_SPACING = 0.24         # trunk-to-trunk between teammates; duck x-extent is 0.21 m, tighter collides
@@ -158,8 +158,8 @@ def _add_hemp_material(spec: mujoco.MjSpec) -> None:
 # the inter-duck strands pick up exactly at the wrap's two ends.
 WRAP_ELLIPSE_X = 0.041    # torso half-depth + rope radius — snug on the shell
 WRAP_ELLIPSE_Y = 0.055    # torso half-width + rope radius
-WRAP_Z0 = 0.024           # bottom turn (center side)
-WRAP_Z1 = 0.050           # top turn (away side)
+WRAP_Z0 = 0.004           # bottom turn (center side) — belly, below mid-torso
+WRAP_Z1 = 0.030           # top turn (away side)
 WRAP_TURNS = 3.5
 WRAP_TILT = np.radians(12.0)   # coil plane tips up toward the duck's back
 WRAP_JITTER = 0.0015           # per-turn radius/z wobble — kills the CNC look
