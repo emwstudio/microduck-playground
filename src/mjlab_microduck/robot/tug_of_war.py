@@ -54,7 +54,6 @@ ROPE_RGBA = (0.92, 0.87, 0.70, 1.0)
 ROPE_SITE_Y = 0.052
 ROPE_SITE_Z = 0.035
 ROPE_CHEST_X = 0.022
-ROPE_RADIUS = 0.006
 
 DUCK_SPACING = 0.24         # trunk-to-trunk between teammates; duck x-extent is 0.21 m, tighter collides
 CENTER_GAP = 0.30           # trunk distance between the two inner ducks (tails face center)
@@ -127,7 +126,6 @@ def _link_side_pairs(pa: str, pb: str, red: list[str]) -> tuple[tuple[str, str],
         else (("left", "right"), ("right", "left"))
 
 
-SAG_SUBSEGMENTS = 4       # mocap cylinders per cord
 SAG_PER_SLACK = 0.6       # parabola depth per metre of slack
 SAG_MAX = 0.045
 
@@ -154,34 +152,55 @@ def _add_hemp_material(spec: mujoco.MjSpec) -> None:
     mat.texuniform = True
 
 
-# Waist wrap: a 1.5-turn twisted-rope helix hugging the torso, from the
-# away-from-center side (local +x, the direction the duck faces) around to
-# the center side (local -x). One continuous rope: wrap ends are where the
-# inter-duck strands pick up.
-WRAP_ELLIPSE_X = 0.040    # torso half-depth + clearance
-WRAP_ELLIPSE_Y = 0.056    # torso half-width + clearance
-WRAP_Z_FRONT = 0.046      # hip height, like the reference video
-WRAP_Z_BACK = 0.028
-WRAP_TURNS = 1.5
-WRAP_FRONT_LOCAL = np.array([WRAP_ELLIPSE_X, 0.0, WRAP_Z_FRONT])
-WRAP_BACK_LOCAL = np.array([-WRAP_ELLIPSE_X, 0.0, WRAP_Z_BACK])
-ROPE_PLY_CENTER_R = 0.0028   # 3-ply rope ~12 mm overall, like the reference
-ROPE_PLY_TUBE_R = 0.0032
+# Waist wrap: a 3.5-turn twisted-rope spiral hugging the belly, tilted and
+# slightly irregular like a hand-tied coil (reference video: 3 snug turns,
+# visibly tilted, working end leaving from mid-coil). One continuous rope:
+# the inter-duck strands pick up exactly at the wrap's two ends.
+WRAP_ELLIPSE_X = 0.041    # torso half-depth + rope radius — snug on the shell
+WRAP_ELLIPSE_Y = 0.055    # torso half-width + rope radius
+WRAP_Z0 = 0.024           # bottom turn (center side)
+WRAP_Z1 = 0.050           # top turn (away side)
+WRAP_TURNS = 3.5
+WRAP_TILT = np.radians(12.0)   # coil plane tips up toward the duck's back
+WRAP_JITTER = 0.0015           # per-turn radius/z wobble — kills the CNC look
+WRAP_FRONT_LOCAL = np.array([WRAP_ELLIPSE_X, 0.0, WRAP_Z1])
+WRAP_BACK_LOCAL = np.array([-WRAP_ELLIPSE_X, 0.0, WRAP_Z0])
+ROPE_PLY_CENTER_R = 0.0038   # 3-ply rope ~16 mm overall — chunky like the reference
+ROPE_PLY_TUBE_R = 0.0043
+ROPE_PLY_TWISTS_PER_TURN = 4  # ply rotations per coil turn
 
 
-def _helix_center(t: float) -> np.ndarray:
-    theta = 2.0 * np.pi * WRAP_TURNS * t          # 0 → 3π: front → 1.5 turns → back
-    return np.array([
-        WRAP_ELLIPSE_X * np.cos(theta),
-        WRAP_ELLIPSE_Y * np.sin(theta),
-        WRAP_Z_FRONT + (WRAP_Z_BACK - WRAP_Z_FRONT) * t,
-    ])
+def _wrap_path(rng: np.random.Generator):
+    jitter_r = rng.uniform(-WRAP_JITTER, WRAP_JITTER, 16)
+    jitter_z = rng.uniform(-WRAP_JITTER, WRAP_JITTER, 16)
+
+    def path(t: float) -> np.ndarray:
+        theta = 2.0 * np.pi * WRAP_TURNS * t   # 0 → 7π: back → 3.5 turns → front
+        seg = min(int(t * 16), 15)
+        r_scale = 1.0 + jitter_r[seg]
+        point = np.array([
+            WRAP_ELLIPSE_X * r_scale * np.cos(theta),
+            WRAP_ELLIPSE_Y * r_scale * np.sin(theta),
+            WRAP_Z0 + (WRAP_Z1 - WRAP_Z0) * t + jitter_z[seg],
+        ])
+        point[2] += np.tan(WRAP_TILT) * point[0]
+        return point
+    return path
+
+
+def _straight_path(length: float):
+    def path(t: float) -> np.ndarray:
+        return np.array([0.0, 0.0, (t - 0.5) * length])
+    return path
 
 
 def _twisted_tube_mesh(spec: mujoco.MjSpec, name: str,
-                       path, t_segments: int = 66, alpha_segments: int = 7,
-                       twists: int = 10, uv_repeats: float = 14.0) -> None:
-    """3-ply twisted rope following an arbitrary path (inline mesh with UVs)."""
+                       path, t_segments: int, alpha_segments: int,
+                       twists: float, uv_repeats: float) -> None:
+    """3-ply twisted rope following an arbitrary path (inline mesh with UVs).
+
+    Each ply is a tube whose centreline itself spirals around the path —
+    geometry-level twist, no texture trickery required for the silhouette."""
     verts: list[tuple[float, float, float]] = []
     uvs: list[tuple[float, float]] = []
     faces: list[tuple[int, int, int]] = []
@@ -194,7 +213,6 @@ def _twisted_tube_mesh(spec: mujoco.MjSpec, name: str,
             center = path(t)
             tangent = path(min(1.0, t + eps)) - path(max(0.0, t - eps))
             tangent /= np.linalg.norm(tangent)
-            # Frame perpendicular to the path tangent.
             ref = np.array([0.0, 0.0, 1.0])
             if abs(np.dot(tangent, ref)) > 0.9:
                 ref = np.array([1.0, 0.0, 0.0])
@@ -205,7 +223,8 @@ def _twisted_tube_mesh(spec: mujoco.MjSpec, name: str,
             u2 = np.cos(phi) * u + np.sin(phi) * w
             for j in range(alpha_segments):
                 alpha = 2.0 * np.pi * j / alpha_segments
-                point = center + offset + ROPE_PLY_TUBE_R * (np.cos(alpha) * u2 + np.sin(alpha) * np.cross(tangent, u2))
+                point = center + offset + ROPE_PLY_TUBE_R * (
+                    np.cos(alpha) * u2 + np.sin(alpha) * np.cross(tangent, u2))
                 verts.append(tuple(point))
                 uvs.append((t * uv_repeats, (j / alpha_segments + k / 3) % 1.0))
         for i in range(t_segments - 1):
@@ -236,6 +255,11 @@ def _add_waist_wraps(spec: mujoco.MjSpec, n_per_team: int) -> None:
             conaffinity=0,
             density=0.0,   # pure visual — no added mass or inertia
         )
+
+
+SPAN_PIECE_LENGTH = 0.05    # fixed-length twisted piece, chains overlap
+SPAN_PIECES = 6             # pieces per inter-duck strand
+SAG_SUBSEGMENTS = SPAN_PIECES
 
 
 @dataclass
@@ -286,7 +310,11 @@ def _site_world(data: mujoco.MjData, body_id: int, local: np.ndarray,
 
 def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
                         visuals: list[RopeVisual]) -> None:
-    """Move every hemp sub-segment onto its sagging strand curve (per frame)."""
+    """Lay every fixed-length twisted piece along its sagging strand curve.
+
+    Pieces keep their mesh length (mesh scale is an asset-level property and
+    cannot change per frame); consecutive pieces overlap into each other and
+    the end pieces sink into the waist wraps, hiding every joint."""
     quat = np.zeros(4)
     p0 = np.zeros(3)
     p1 = np.zeros(3)
@@ -297,19 +325,19 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         slack = max(0.0, vis.nominal - chord)
         sag = min(SAG_MAX, SAG_PER_SLACK * slack + 0.002)
         t0, t1 = vis.fraction, vis.fraction + 1.0 / SAG_SUBSEGMENTS
-        pa = p0 + (p1 - p0) * t0
-        pb = p0 + (p1 - p0) * t1
-        pa[2] -= 4.0 * sag * t0 * (1.0 - t0)
-        pb[2] -= 4.0 * sag * t1 * (1.0 - t1)
-        direction = pb - pa
-        length = float(np.linalg.norm(direction))
-        if length < 1e-6:
+        tm = (t0 + t1) / 2.0
+        center = p0 + (p1 - p0) * tm
+        center[2] -= 4.0 * sag * tm * (1.0 - tm)
+        # Tangent of the sag parabola at tm.
+        tangent = (p1 - p0).copy()
+        tangent[2] -= 4.0 * sag * (1.0 - 2.0 * tm)
+        norm = float(np.linalg.norm(tangent))
+        if norm < 1e-6:
             continue
         mocap_id = model.body_mocapid[vis.body_id]
-        data.mocap_pos[mocap_id] = (pa + pb) / 2.0
-        mujoco.mju_quatZ2Vec(quat, direction / length)
+        data.mocap_pos[mocap_id] = center
+        mujoco.mju_quatZ2Vec(quat, tangent / norm)
         data.mocap_quat[mocap_id] = quat
-        model.geom_size[vis.geom_id][1] = length / 2.0
 
 
 def _add_line_geom(spec: mujoco.MjSpec, name: str, x: float,
@@ -365,7 +393,11 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
             cord.wrap_site(f"{pb}rope_{side_b}")
 
     _add_hemp_material(parent)
-    _twisted_tube_mesh(parent, "tug_wrap", _helix_center)
+    _twisted_tube_mesh(parent, "tug_wrap", _wrap_path(np.random.default_rng(20260914)),
+                       t_segments=66, alpha_segments=7,
+                       twists=WRAP_TURNS * ROPE_PLY_TWISTS_PER_TURN, uv_repeats=14.0)
+    _twisted_tube_mesh(parent, "tug_piece", _straight_path(SPAN_PIECE_LENGTH),
+                       t_segments=30, alpha_segments=7, twists=2.5, uv_repeats=2.0)
     _add_waist_wraps(parent, n_per_team)
     n_strands = 2 * n_per_team - 1
     for idx in range(n_strands):
@@ -373,8 +405,8 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
             body = parent.worldbody.add_body(name=f"tugvis_{idx}_{sub}", mocap=True)
             body.add_geom(
                 name=f"tugvis_{idx}_{sub}",
-                type=mujoco.mjtGeom.mjGEOM_CYLINDER,
-                size=(ROPE_RADIUS, 0.1, 0.0),
+                type=mujoco.mjtGeom.mjGEOM_MESH,
+                meshname="tug_piece",
                 material="tug_hemp",
                 contype=0,
                 conaffinity=0,

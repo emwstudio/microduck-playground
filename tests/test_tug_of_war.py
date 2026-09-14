@@ -42,11 +42,11 @@ def test_all_rope_sites_resolve(tug_model) -> None:
 
 
 def test_hemp_visuals_span_the_chain(tug_model) -> None:
-    # 9 strands x 4 sag sub-segments of mocap; physics tendons hidden.
-    assert tug_model.nmocap == 9 * 4
+    # 9 strands x 6 fixed-length twisted pieces of mocap; tendons hidden.
+    assert tug_model.nmocap == 9 * 6
     assert tug_model.ntendon == 18
     visuals = resolve_rope_visuals(tug_model, 5)
-    assert len(visuals) == 36
+    assert len(visuals) == 54
     assert all(v.body_id >= 0 and v.geom_id >= 0 for v in visuals)
     assert all(v.trunk_a_id >= 0 and v.trunk_b_id >= 0 for v in visuals)
 
