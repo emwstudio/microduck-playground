@@ -100,6 +100,37 @@ def _tint_shells(spec: mujoco.MjSpec, rgba: tuple[float, float, float, float]) -
             mat.rgba = rgba
 
 
+ROPE_PLY_CENTER_R = 0.0038
+ROPE_PLY_TUBE_R = 0.0043
+ROPE_PLY_TWISTS_PER_TURN = 4
+
+CHORD_BINS = np.round(np.arange(0.16, 0.38, 0.02), 2)
+SAG_BINS = (0.0, 0.33, 0.67, 1.0)   # fraction of SAG_MAX
+SPAN_T_SEGMENTS = 26
+SPAN_ALPHA_SEGMENTS = 6
+
+
+# Harness ring geometry: butt carabiner 3 cm aft of the butt shell at hip
+# height (rope line z ~0.085 world), chest carabiner on the belly shell.
+TEAM_Y = 0.0
+RING_LOCAL_X = -0.065
+RING_LOCAL_Z = -0.030
+RING_LOCAL_Y = 0.0
+RING_INNER_W = 0.030
+RING_INNER_H = 0.020
+RING_TUBE = 0.0035
+CHEST_LOCAL = np.array([0.030, 0.0, -0.030])
+SPAWN_Y = TEAM_Y
+
+
+def ring_local(team: str) -> np.ndarray:
+    return np.array([RING_LOCAL_X, RING_LOCAL_Y, RING_LOCAL_Z])
+
+
+def chest_local(team: str) -> np.ndarray:
+    return CHEST_LOCAL.copy()
+
+
 def _add_rope_sites(spec: mujoco.MjSpec, team: str) -> None:
     trunk = _find_body(spec, "trunk_base")
     trunk.add_site(
@@ -204,183 +235,6 @@ def _add_hemp_material(spec: mujoco.MjSpec) -> None:
     mat.texuniform = True
     mat.specular = 0.35
     mat.shininess = 0.4
-
-
-# Waist wrap: a 3.5-turn twisted-rope spiral hugging the belly, tilted and
-# slightly irregular like a hand-tied coil (reference video: 3 snug turns,
-# visibly tilted, working end leaving from mid-coil). One continuous rope:
-# the inter-duck strands pick up exactly at the wrap's two ends.
-WRAP_ELLIPSE_X = 0.041    # torso half-depth + rope radius — snug on the shell
-WRAP_ELLIPSE_Y = 0.055    # torso half-width + rope radius
-WRAP_Z0 = 0.004           # bottom turn (center side) — belly, below mid-torso
-WRAP_Z1 = 0.030           # top turn (away side)
-WRAP_TURNS = 3.5
-WRAP_TILT = np.radians(12.0)   # coil plane tips up toward the duck's back
-WRAP_JITTER = 0.0015           # per-turn radius/z wobble — kills the CNC look
-WRAP_FRONT_LOCAL = np.array([WRAP_ELLIPSE_X, 0.0, WRAP_Z1])
-WRAP_BACK_LOCAL = np.array([-WRAP_ELLIPSE_X, 0.0, WRAP_Z0])
-
-# Harness D-ring: every duck stands TEAM_Y behind the straight rope line
-# (y=0, camera side) — real tug teams stand behind the rope, not on it.
-# A steel D-ring on a short stud reaches from the harness to the line and
-# the rope threads straight through every ring. Red ducks yaw 180 deg, so
-# their local y flips sign to land the ring on world y=0.
-TEAM_Y = 0.0                   # ducks stand ON the line; the rope runs under the belly
-RING_LOCAL_X = -0.065          # tail-hook eye, 3 cm aft of the butt shell
-RING_LOCAL_Z = -0.030          # hip-back corner -> rope line z ~0.085 world
-RING_LOCAL_Y = 0.0             # centred on the spine
-RING_INNER_W = 0.030           # obround opening (y) — 16 mm rope + clearance
-RING_INNER_H = 0.020           # obround opening (z)
-RING_TUBE = 0.0035             # chunky enough to read at 720p
-CHEST_LOCAL = np.array([0.030, 0.0, -0.030])   # frame-front carabiner eye
-
-
-SPAWN_Y = TEAM_Y
-
-
-def ring_local(team: str) -> np.ndarray:
-    return np.array([RING_LOCAL_X, RING_LOCAL_Y, RING_LOCAL_Z])
-
-
-def chest_local(team: str) -> np.ndarray:
-    return CHEST_LOCAL.copy()
-ROPE_PLY_CENTER_R = 0.0042   # 3-ply rope ~18 mm overall — chunky like the reference
-ROPE_PLY_TUBE_R = 0.0048
-ROPE_PLY_TWISTS_PER_TURN = 4  # ply rotations per coil turn
-
-
-def _wrap_path(rng: np.random.Generator):
-    jitter_r = rng.uniform(-WRAP_JITTER, WRAP_JITTER, 16)
-    jitter_z = rng.uniform(-WRAP_JITTER, WRAP_JITTER, 16)
-
-    def path(t: float) -> np.ndarray:
-        theta = 2.0 * np.pi * WRAP_TURNS * t   # 0 → 7π: back → 3.5 turns → front
-        seg = min(int(t * 16), 15)
-        r_scale = 1.0 + jitter_r[seg]
-        point = np.array([
-            WRAP_ELLIPSE_X * r_scale * np.cos(theta),
-            WRAP_ELLIPSE_Y * r_scale * np.sin(theta),
-            WRAP_Z0 + (WRAP_Z1 - WRAP_Z0) * t + jitter_z[seg],
-        ])
-        point[2] += np.tan(WRAP_TILT) * point[0]
-        return point
-    return path
-
-
-def _straight_path(length: float):
-    def path(t: float) -> np.ndarray:
-        return np.array([0.0, 0.0, (t - 0.5) * length])
-    return path
-
-
-def _twisted_tube_mesh(spec: mujoco.MjSpec, name: str,
-                       path, t_segments: int, alpha_segments: int,
-                       twists: float, uv_repeats: float,
-                       sub_fibers: int = 5, flyaway: int = 0,
-                       seed: int = 42) -> None:
-    """Two-level twisted rope following an arbitrary path (inline mesh, UVs).
-
-    Level 1: three plies spiral around the path. Level 2 (sub_fibers > 1):
-    each ply is itself a bundle of thinner yarns spiralling inside the ply
-    tube — the same construction as real 3-ply hemp. `flyaway` bakes that
-    many short fibre spikes into the mesh, sticking a few mm off the yarns:
-    the fuzzy halo of real manila rope."""
-    rng = np.random.default_rng(seed)
-    verts: list[tuple[float, float, float]] = []
-    uvs: list[tuple[float, float]] = []
-    faces: list[tuple[int, int, int]] = []
-    eps = 1e-3
-
-    def frame(t: float):
-        center = path(t)
-        tangent = path(min(1.0, t + eps)) - path(max(0.0, t - eps))
-        tangent /= np.linalg.norm(tangent)
-        ref = np.array([0.0, 0.0, 1.0])
-        if abs(np.dot(tangent, ref)) > 0.9:
-            ref = np.array([1.0, 0.0, 0.0])
-        u = ref - np.dot(ref, tangent) * tangent
-        u /= np.linalg.norm(u)
-        return center, tangent, u, np.cross(tangent, u)
-
-    yarns_per_ply = max(1, sub_fibers)
-    yarn_center_r = ROPE_PLY_TUBE_R * 0.55 if yarns_per_ply > 1 else 0.0
-    yarn_tube_r = ROPE_PLY_TUBE_R * (0.5 if yarns_per_ply > 1 else 1.0)
-    sub_twists = twists * 3.0   # yarns counter-twist faster than plies
-
-    for k in range(3):
-        for f in range(yarns_per_ply):
-            base = len(verts)
-            for i in range(t_segments):
-                t = i / (t_segments - 1)
-                center, tangent, u, w = frame(t)
-                phi = 2.0 * np.pi * (k / 3 + twists * t)
-                u2 = np.cos(phi) * u + np.sin(phi) * w
-                ply_center = center + ROPE_PLY_CENTER_R * u2
-                yarn_center = ply_center
-                if yarns_per_ply > 1:
-                    psi = 2.0 * np.pi * (f / yarns_per_ply + sub_twists * t)
-                    yarn_center = ply_center + yarn_center_r * (np.cos(psi) * u2 + np.sin(psi) * np.cross(tangent, u2))
-                yarn_out = yarn_center - ply_center
-                n = np.linalg.norm(yarn_out)
-                yarn_out = yarn_out / n if n > 1e-9 else u2
-                for j in range(alpha_segments):
-                    alpha = 2.0 * np.pi * j / alpha_segments
-                    point = yarn_center + yarn_tube_r * (
-                        np.cos(alpha) * yarn_out + np.sin(alpha) * np.cross(tangent, yarn_out))
-                    verts.append(tuple(point))
-                    uvs.append((t * uv_repeats, (j / alpha_segments + f / yarns_per_ply) % 1.0))
-            for i in range(t_segments - 1):
-                for j in range(alpha_segments):
-                    j2 = (j + 1) % alpha_segments
-                    a = base + i * alpha_segments + j
-                    b = base + (i + 1) * alpha_segments + j
-                    c = base + (i + 1) * alpha_segments + j2
-                    d = base + i * alpha_segments + j2
-                    faces.append((a, b, c))
-                    faces.append((a, c, d))
-
-    for _ in range(flyaway):
-        # A tapered 3-segment fibre sticking 2-5 mm off a random yarn.
-        t = rng.uniform(0.02, 0.98)
-        k = rng.integers(0, 3)
-        f = rng.integers(0, yarns_per_ply)
-        center, tangent, u, w = frame(t)
-        phi = 2.0 * np.pi * (k / 3 + twists * t)
-        u2 = np.cos(phi) * u + np.sin(phi) * w
-        ply_center = center + ROPE_PLY_CENTER_R * u2
-        psi = 2.0 * np.pi * (f / yarns_per_ply + sub_twists * t)
-        yarn_center = ply_center + yarn_center_r * (np.cos(psi) * u2 + np.sin(psi) * np.cross(tangent, u2))
-        out_dir = u2 * 0.7 + w * rng.uniform(-0.5, 0.5) + tangent * rng.uniform(-0.4, 0.4)
-        out_dir /= np.linalg.norm(out_dir)
-        length = rng.uniform(0.0015, 0.003)
-        root = yarn_center + yarn_tube_r * out_dir
-        mid = root + out_dir * length * 0.6 + tangent * rng.uniform(-0.001, 0.001)
-        tip = root + out_dir * length
-        base = len(verts)
-        for point, radius in ((root, 0.00025), (mid, 0.00015), (tip, 0.00005)):
-            side = np.cross(out_dir, tangent)
-            n_side = np.linalg.norm(side)
-            side = side / n_side if n_side > 1e-9 else u
-            for j in range(4):
-                ang = np.pi / 2 * j
-                verts.append(tuple(point + radius * (np.cos(ang) * side + np.sin(ang) * np.cross(out_dir, side))))
-                uvs.append((t * uv_repeats, 0.5))
-        for ring in range(2):
-            for j in range(4):
-                j2 = (j + 1) % 4
-                a = base + ring * 4 + j
-                b = base + ring * 4 + j2
-                c = base + (ring + 1) * 4 + j2
-                d = base + (ring + 1) * 4 + j
-                faces.append((a, b, c))
-                faces.append((a, c, d))
-        for j in range(4):  # tip cap fan
-            faces.append((base + 8 + j, base + 8 + (j + 1) % 4, base + 8 + (j + 2) % 4))
-
-    mesh = spec.add_mesh(name=name)
-    mesh.uservert = np.array(verts, dtype=np.float32).flatten()
-    mesh.userface = np.array(faces, dtype=np.int32).flatten()
-    mesh.usertexcoord = np.array(uvs, dtype=np.float32).flatten()
 
 
 def _add_rig_materials(spec: mujoco.MjSpec) -> None:
@@ -494,47 +348,6 @@ def _add_harness_rings(spec: mujoco.MjSpec, n_per_team: int) -> None:
         )
 
 
-def _add_waist_wraps(spec: mujoco.MjSpec, n_per_team: int) -> None:
-    red, blue = team_prefixes(n_per_team)
-    for prefix in red + blue:
-        trunk = _find_body(spec, f"{prefix}trunk_base")
-        trunk.add_geom(
-            name=f"{prefix}tug_wrap",
-            type=mujoco.mjtGeom.mjGEOM_MESH,
-            meshname="tug_wrap",
-            material="tug_webbing",
-            contype=0,
-            conaffinity=0,
-            density=0.0,   # pure visual — no added mass or inertia
-        )
-
-
-SPAN_T_SEGMENTS = 26        # sweep resolution per inter-duck strand
-SPAN_ALPHA_SEGMENTS = 6
-
-
-# Span rendering: precomputed swept-rope variants. MuJoCo's offscreen
-# renderer caches mesh VBOs and mjr_uploadMesh corrupts meshes with high
-# vertex offsets, so per-frame resweeping is out; instead we precompute a
-# (chord x sag) grid of complete swept ropes in a local frame (x = chord
-# axis, -z = sag) and per frame point each span's geom at the nearest
-# variant via model.geom_dataid — plain int writes, VBOs stay cached.
-CHORD_BINS = np.round(np.arange(0.16, 0.38, 0.02), 2)
-SAG_BINS = (0.0, 0.33, 0.67, 1.0)   # fraction of SAG_MAX
-
-
-@dataclass
-class SpanVisual:
-    body_id: int
-    geom_id: int
-    trunk_a_id: int
-    trunk_b_id: int
-    local_a: np.ndarray    # endpoint on duck a (its back/center-side wrap end)
-    local_b: np.ndarray    # endpoint on duck b (its front/away-side wrap end)
-    nominal: float
-    variant_mesh_ids: np.ndarray  # (len(CHORD_BINS), len(SAG_BINS))
-
-
 def _span_hook_sites(pa: str, pb: str, red: list[str]) -> tuple[str, str]:
     """Force path through the duck: pulled at the butt, pulls with the
     chest. Each span uses the hooks facing each other — butt on the
@@ -545,6 +358,18 @@ def _span_hook_sites(pa: str, pb: str, red: list[str]) -> tuple[str, str]:
     if pa_red and not pb_red:
         return "rope_hook", "rope_hook"
     return "rope_hook_chest", "rope_hook"
+
+
+@dataclass
+class SpanVisual:
+    body_id: int
+    geom_id: int
+    trunk_a_id: int
+    trunk_b_id: int
+    local_a: np.ndarray
+    local_b: np.ndarray
+    nominal: float
+    variant_mesh_ids: np.ndarray
 
 
 def resolve_rope_visuals(model: mujoco.MjModel, n_per_team: int,
@@ -837,11 +662,6 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
     _add_hemp_material(parent)
     _matte_floor(parent)
     _add_tug_lighting(parent)
-    _twisted_tube_mesh(parent, "tug_wrap", _wrap_path(np.random.default_rng(20260914)),
-                       t_segments=66, alpha_segments=6,
-                       twists=WRAP_TURNS * ROPE_PLY_TWISTS_PER_TURN, uv_repeats=14.0,
-                       sub_fibers=5, flyaway=110)
-    _add_waist_wraps(parent, n_per_team)
     _add_rig_materials(parent)
     _belly_rope_mesh(parent)
     _load_hook_stls(parent)
