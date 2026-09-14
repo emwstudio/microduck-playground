@@ -150,6 +150,8 @@ def _add_hemp_material(spec: mujoco.MjSpec) -> None:
     mat.textures[mujoco.mjtTextureRole.mjTEXROLE_ROUGHNESS] = "tug_hemp_rgh"
     mat.texrepeat = (12.0, 1.0)
     mat.texuniform = True
+    mat.specular = 0.35
+    mat.shininess = 0.4
 
 
 # Waist wrap: a 3.5-turn twisted-rope spiral hugging the belly, tilted and
@@ -165,8 +167,8 @@ WRAP_TILT = np.radians(12.0)   # coil plane tips up toward the duck's back
 WRAP_JITTER = 0.0015           # per-turn radius/z wobble — kills the CNC look
 WRAP_FRONT_LOCAL = np.array([WRAP_ELLIPSE_X, 0.0, WRAP_Z1])
 WRAP_BACK_LOCAL = np.array([-WRAP_ELLIPSE_X, 0.0, WRAP_Z0])
-ROPE_PLY_CENTER_R = 0.0038   # 3-ply rope ~16 mm overall — chunky like the reference
-ROPE_PLY_TUBE_R = 0.0043
+ROPE_PLY_CENTER_R = 0.0042   # 3-ply rope ~18 mm overall — chunky like the reference
+ROPE_PLY_TUBE_R = 0.0048
 ROPE_PLY_TWISTS_PER_TURN = 4  # ply rotations per coil turn
 
 
@@ -451,6 +453,30 @@ def span_uvs() -> np.ndarray:
     return np.array(uvs, dtype=np.float32)
 
 
+def _add_tug_lighting(spec: mujoco.MjSpec) -> None:
+    """Warm key + cool fill on top of the scene's single directional light —
+    the rope crowns need a highlight direction and the grooves need a soft
+    counter-light to read depth without true AO."""
+    spec.visual.quality.offsamples = 8
+    spec.visual.quality.shadowsize = 4096
+    spec.worldbody.add_light(
+        name="tug_key",
+        pos=(0.0, -1.5, 2.0),
+        dir=(0.0, 0.55, -0.84),
+        type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL,
+        diffuse=(0.9, 0.82, 0.68),
+        specular=(0.5, 0.45, 0.35),
+    )
+    spec.worldbody.add_light(
+        name="tug_fill",
+        pos=(0.0, 1.5, 1.0),
+        dir=(0.0, -0.55, -0.84),
+        type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL,
+        diffuse=(0.25, 0.30, 0.38),
+        specular=(0.1, 0.12, 0.15),
+    )
+
+
 def _build_span_variants(spec: mujoco.MjSpec) -> None:
     uvs = span_uvs().flatten()
     for ci, chord in enumerate(CHORD_BINS):
@@ -556,6 +582,7 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
             cord.wrap_site(f"{pb}rope_{side_b}")
 
     _add_hemp_material(parent)
+    _add_tug_lighting(parent)
     _twisted_tube_mesh(parent, "tug_wrap", _wrap_path(np.random.default_rng(20260914)),
                        t_segments=66, alpha_segments=6,
                        twists=WRAP_TURNS * ROPE_PLY_TWISTS_PER_TURN, uv_repeats=14.0,
