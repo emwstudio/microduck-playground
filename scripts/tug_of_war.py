@@ -117,7 +117,7 @@ def main() -> None:
     input_name = session.get_inputs()[0].name
     output_name = session.get_outputs()[0].name
 
-    rope_visuals = resolve_rope_visuals(model, args.n_per_team)
+    rope_visuals = resolve_rope_visuals(model, args.n_per_team, args.spacing, args.gap)
     renderer = None
     writer = None
     if not args.no_render:
