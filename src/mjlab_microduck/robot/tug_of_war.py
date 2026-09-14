@@ -453,6 +453,14 @@ def span_uvs() -> np.ndarray:
     return np.array(uvs, dtype=np.float32)
 
 
+def _matte_floor(spec: mujoco.MjSpec) -> None:
+    """The reference video's checker floor is matte; scene.xml's groundplane
+    material carries reflectance 0.2 which mirror-images every duck."""
+    for mat in spec.materials:
+        if mat.name == "groundplane":
+            mat.reflectance = 0.0
+
+
 def _add_tug_lighting(spec: mujoco.MjSpec) -> None:
     """Warm key + cool fill on top of the scene's single directional light —
     the rope crowns need a highlight direction and the grooves need a soft
@@ -582,6 +590,7 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
             cord.wrap_site(f"{pb}rope_{side_b}")
 
     _add_hemp_material(parent)
+    _matte_floor(parent)
     _add_tug_lighting(parent)
     _twisted_tube_mesh(parent, "tug_wrap", _wrap_path(np.random.default_rng(20260914)),
                        t_segments=66, alpha_segments=6,

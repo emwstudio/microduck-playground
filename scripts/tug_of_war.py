@@ -41,6 +41,22 @@ from mjlab_microduck.robot.tug_of_war import (
 #   curl -sL -o policies/alpha_walking.onnx \
 #     https://huggingface.co/pollen-robotics/microduck-policies/resolve/main/alpha_walking.onnx
 DEFAULT_POLICY = "policies/alpha_walking.onnx"
+
+
+def grade_frame(frame):
+    """Filmic-ish grade toward the reference video's warm three.js look:
+    highlight-lifted S-curve, warm tint, subtle bloom from the highlights."""
+    img = frame.astype(np.float32) / 255.0
+    img = np.clip(img ** 0.92, 0, 1)                      # gentle gamma lift
+    img = np.clip(img + 0.55 * img * (img - 0.5), 0, 1)   # soft S-curve
+    img *= np.array([1.04, 1.01, 0.97])                   # warm tint
+    lum = img.mean(axis=2)
+    bloom_src = np.clip(lum - 0.72, 0, 1) ** 2            # highlight mask
+    ky = np.array([1, 4, 6, 4, 1], dtype=np.float32) / 16
+    bloom = np.apply_along_axis(lambda r: np.convolve(r, ky, mode="same"), 0, bloom_src)
+    bloom = np.apply_along_axis(lambda r: np.convolve(r, ky, mode="same"), 1, bloom)
+    img = np.clip(img + 0.22 * bloom[..., None], 0, 1)
+    return (img * 255).astype(np.uint8)
 CONTROL_DT = 0.02  # 50 Hz policy rate
 SETTLE_S = 0.5     # hold default pose before the pull starts
 
@@ -90,6 +106,8 @@ def main() -> None:
     parser.add_argument("--distance", type=float, default=1.6)
     parser.add_argument("--elevation", type=float, default=-15.0)
     parser.add_argument("--azimuth", type=float, default=90.0)
+    parser.add_argument("--no-grade", action="store_true",
+                        help="disable the filmic post-processing grade")
     args = parser.parse_args()
 
     if not args.no_render and args.out is None:
@@ -168,7 +186,8 @@ def main() -> None:
             if renderer is not None and step % render_skip == 0:
                 update_rope_visuals(model, data, rope_spans, renderer._mjr_context)
                 renderer.update_scene(data, camera)
-                writer.append_data(renderer.render())
+                frame = renderer.render()
+                writer.append_data(frame if args.no_grade else grade_frame(frame))
             if step * control_dt > 1.0:  # grace period: spawn transients
                 winner, reason = check_winner(model, data, rigs, args.win_x, MIN_FALLEN)
                 if winner:
@@ -189,7 +208,8 @@ def main() -> None:
                 if step % render_skip == 0:
                     update_rope_visuals(model, data, rope_spans, renderer._mjr_context)
                     renderer.update_scene(data, camera)
-                    writer.append_data(renderer.render())
+                    frame = renderer.render()
+                writer.append_data(frame if args.no_grade else grade_frame(frame))
                 step += 1
 
     if writer is not None:
