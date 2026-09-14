@@ -31,10 +31,10 @@ renderer = mujoco.Renderer(model, height=900, width=1200)
 scene_option = mujoco.MjvOption()
 
 cams = {
-    "strap_back34": dict(azimuth=205, elevation=-12, distance=0.40, lookat=(-0.04, 0, 0.10)),
-    "strap_side": dict(azimuth=90, elevation=-8, distance=0.36, lookat=(-0.02, 0, 0.10)),
-    "strap_front34": dict(azimuth=25, elevation=-12, distance=0.40, lookat=(0.0, 0, 0.10)),
-    "strap_top": dict(azimuth=180, elevation=-55, distance=0.45, lookat=(-0.02, 0, 0.10)),
+    "collar_back_eye": dict(azimuth=180, elevation=-15, distance=0.25, lookat=(-0.055, 0, 0.10)),
+    "collar_front_eye": dict(azimuth=0, elevation=-15, distance=0.25, lookat=(0.04, 0, 0.10)),
+    "collar_screw": dict(azimuth=90, elevation=-20, distance=0.22, lookat=(0.0, 0.05, 0.10)),
+    "collar_back34": dict(azimuth=215, elevation=-18, distance=0.38, lookat=(-0.02, 0, 0.10)),
 }
 cam = mujoco.MjvCamera()
 for name, cfg in cams.items():

@@ -24,18 +24,22 @@ leg tips' fold-back cone touching the rails at extremes, not a fit defect.
 Contacts with trunk_base at the rail feet are the INTENDED mounting interface
 (classified MOUNTING in the report, not counted as faults).
 
-## Fastening (how the pack stays on the duck)
+## Fastening — clamp collar (current design, cad_collar.py)
 
-Two complementary features, same scheme as the swing seat (locating + strap):
+The standoff pack + velcro strap above is superseded by a one-piece **clamp
+collar** (`tug_collar.stl` + `tug_clamp_screw.stl`): a 14×2.2 mm band
+following the shell contour (front +34 mm, back -48 mm, sides ±49 mm at
+band height z = -10 mm, i.e. ~1-2 mm clamping allowance), SPLIT on the +y
+side with two lugs — an M3 screw through the lugs tightens the band's
+friction grip on the shell (hose-clamp / shaft-collar principle). The tow
+eyes are closed rings integrated in the same print: front eye (chest pull)
+at x = +39 mm, back eye (butt pull) at x = -53 mm, both at z = -10 mm.
+The whole tug force path flows through the collar; no panel, standoffs or
+webbing are needed. The pack + strap STLs are kept in meshes/ as an
+archived alternative.
 
-- **Contoured locating pads** at the rail feet (10 mm discs keyed against the
-  hip-shell corner) stop the pack rotating/sliding on the smooth shell.
-- **A 20×2 mm velcro webbing strap** (`tug_strap.stl`) threads through the
-  two vertical slots cut in the panel's side edges (slot = strap +1 mm
-  clearance) and belts around the waist at slot height (z = -10 mm). The
-  back arc sits in the slot plane (x = -78 mm), front/sides hug the torso
-  with ~2 mm clearance. The strap is removable — the pack itself needs no
-  screws or glue.
+Collar contact/clearance validation against the leg swing envelope is
+pending; the band sits at mid-torso, above the hip joint line.
 
 No insertion-force, pull-out, anti-slip, wear, fatigue or load testing has
 been performed — the fastening is a geometric fit only. 3D-print validation
