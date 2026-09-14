@@ -219,21 +219,20 @@ WRAP_BACK_LOCAL = np.array([-WRAP_ELLIPSE_X, 0.0, WRAP_Z0])
 # A steel D-ring on a short stud reaches from the harness to the line and
 # the rope threads straight through every ring. Red ducks yaw 180 deg, so
 # their local y flips sign to land the ring on world y=0.
-TEAM_Y = -0.055
-RING_LOCAL_X = -0.045          # centre side of the harness (toward the opponent)
-RING_LOCAL_Z = -0.005          # hip height
-RING_LOCAL_Y = 0.055           # magnitude; sign flips per team yaw
-RING_INNER_W = 0.026           # obround opening (y)
-RING_INNER_H = 0.016           # obround opening (z)
-RING_TUBE = 0.0018
+TEAM_Y = 0.0                   # ducks stand ON the line; the rope runs under the belly
+RING_LOCAL_X = -0.065          # tail-hook eye, 3 cm aft of the butt shell
+RING_LOCAL_Z = -0.030          # hip-back corner -> rope line z ~0.085 world
+RING_LOCAL_Y = 0.0             # centred on the spine
+RING_INNER_W = 0.030           # obround opening (y) — 16 mm rope + clearance
+RING_INNER_H = 0.020           # obround opening (z)
+RING_TUBE = 0.0035             # chunky enough to read at 720p
 
 
 SPAWN_Y = TEAM_Y
 
 
 def ring_local(team: str) -> np.ndarray:
-    side = -RING_LOCAL_Y if team == "red" else RING_LOCAL_Y
-    return np.array([RING_LOCAL_X, side, RING_LOCAL_Z])
+    return np.array([RING_LOCAL_X, RING_LOCAL_Y, RING_LOCAL_Z])
 ROPE_PLY_CENTER_R = 0.0042   # 3-ply rope ~18 mm overall — chunky like the reference
 ROPE_PLY_TUBE_R = 0.0048
 ROPE_PLY_TWISTS_PER_TURN = 4  # ply rotations per coil turn
@@ -382,6 +381,10 @@ def _add_rig_materials(spec: mujoco.MjSpec) -> None:
     steel.rgba = (0.68, 0.70, 0.74, 1.0)
     steel.specular = 0.9
     steel.shininess = 0.7
+    orange = spec.add_material(name="tug_carabiner")
+    orange.rgba = (0.92, 0.42, 0.08, 1.0)   # anodized-orange carabiner
+    orange.specular = 0.85
+    orange.shininess = 0.6
 
 
 def _dring_mesh(spec: mujoco.MjSpec, name: str = "tug_dring",
@@ -429,25 +432,37 @@ def _add_harness_rings(spec: mujoco.MjSpec, n_per_team: int) -> None:
     for prefix, team in [(p_, "red") for p_ in red] + [(p_, "blue") for p_ in blue]:
         trunk = _find_body(spec, f"{prefix}trunk_base")
         eye = ring_local(team)
-        stud_y = np.sign(eye[1]) * 0.045   # harness side surface
+        # base plate on the butt shell
+        plate_x = -0.041
         trunk.add_geom(
-            name=f"{prefix}tug_dring",
-            type=mujoco.mjtGeom.mjGEOM_MESH,
-            meshname="tug_dring",
+            name=f"{prefix}tug_hook_plate",
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            size=(0.003, 0.016, 0.012),
+            pos=(plate_x, 0.0, -0.018),
             material="tug_steel",
-            pos=tuple(eye),
             contype=0,
             conaffinity=0,
             density=0.0,
         )
-        # stud: short steel arm from the harness side to the ring
+        # standoff tube: plate -> carabiner eye, along x
+        mid_x = (plate_x + eye[0]) / 2.0
         trunk.add_geom(
             name=f"{prefix}tug_dring_stud",
             type=mujoco.mjtGeom.mjGEOM_CYLINDER,
-            size=(0.0022, 0.5 * abs(eye[1] - stud_y) + 0.004, 0.0),
-            pos=(eye[0], (eye[1] + stud_y) / 2.0, eye[2]),
-            quat=(0.7071, 0.7071, 0.0, 0.0),   # cylinder z → y
+            size=(0.0025, abs(eye[0] - plate_x) / 2.0, 0.0),
+            pos=(mid_x, 0.0, eye[2]),
+            quat=(0.7071, 0.0, 0.7071, 0.0),   # cylinder z → x
             material="tug_steel",
+            contype=0,
+            conaffinity=0,
+            density=0.0,
+        )
+        trunk.add_geom(
+            name=f"{prefix}tug_dring",
+            type=mujoco.mjtGeom.mjGEOM_MESH,
+            meshname="tug_dring",
+            material="tug_carabiner",
+            pos=tuple(eye),
             contype=0,
             conaffinity=0,
             density=0.0,

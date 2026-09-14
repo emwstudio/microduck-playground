@@ -87,10 +87,10 @@ def main() -> None:
     parser.add_argument("--pull-speed", type=float, default=0.2)
     parser.add_argument("--pull-jitter", type=float, default=0.15,
                         help="per-duck relative pull-speed jitter, uniform ±this fraction")
-    parser.add_argument("--team-boost", type=float, default=1.3,
+    parser.add_argument("--team-boost", type=float, default=2.2,
                         help="each round one random team gets its pull speed x(1+this); "
                              "symmetric teams otherwise deadlock into draws")
-    parser.add_argument("--win-x", type=float, default=0.25)
+    parser.add_argument("--win-x", type=float, default=0.18)
     parser.add_argument("--spacing", type=float, default=DUCK_SPACING)
     parser.add_argument("--gap", type=float, default=CENTER_GAP)
     parser.add_argument("--seed", type=int, default=0)
