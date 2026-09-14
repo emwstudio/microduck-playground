@@ -24,5 +24,19 @@ leg tips' fold-back cone touching the rails at extremes, not a fit defect.
 Contacts with trunk_base at the rail feet are the INTENDED mounting interface
 (classified MOUNTING in the report, not counted as faults).
 
-No insertion-force, pull-out, wear, fatigue or load testing has been
-performed. 3D-print validation is required before any hardware use.
+## Fastening (how the pack stays on the duck)
+
+Two complementary features, same scheme as the swing seat (locating + strap):
+
+- **Contoured locating pads** at the rail feet (10 mm discs keyed against the
+  hip-shell corner) stop the pack rotating/sliding on the smooth shell.
+- **A 20×2 mm velcro webbing strap** (`tug_strap.stl`) threads through the
+  two vertical slots cut in the panel's side edges (slot = strap +1 mm
+  clearance) and belts around the waist at slot height (z = -10 mm). The
+  back arc sits in the slot plane (x = -78 mm), front/sides hug the torso
+  with ~2 mm clearance. The strap is removable — the pack itself needs no
+  screws or glue.
+
+No insertion-force, pull-out, anti-slip, wear, fatigue or load testing has
+been performed — the fastening is a geometric fit only. 3D-print validation
+is required before any hardware use.
