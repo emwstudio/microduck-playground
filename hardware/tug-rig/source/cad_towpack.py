@@ -47,15 +47,29 @@ def rounded_panel() -> trimesh.Trimesh:
     return panel
 
 
+STRAP_W, STRAP_T = 0.020, 0.002     # 20 mm velcro strap cross-section
+
+
 def rail(side: float) -> trimesh.Trimesh:
     rail = trimesh.creation.cylinder(radius=RAIL_R, height=abs(PANEL_X - SHELL_BACK_X) + 0.006, sections=16)
     rail.apply_transform(trimesh.geometry.align_vectors([0, 0, 1], [1, 0, 0]))
     rail.apply_translation(((SHELL_BACK_X + PANEL_X) / 2, side * RAIL_Y, RAIL_Z))
-    # rail foot plate on the shell
-    foot = trimesh.creation.cylinder(radius=0.007, height=0.004, sections=20)
-    foot.apply_transform(trimesh.geometry.align_vectors([0, 0, 1], [1, 0, 0]))
-    foot.apply_translation((SHELL_BACK_X - 0.002, side * RAIL_Y, RAIL_Z))
-    return trimesh.boolean.union([rail, foot], engine="manifold")
+    # contoured locating pad: a stubby disc keyed to the hip-shell corner,
+    # keeps the pack from rotating on the smooth shell
+    pad = trimesh.creation.cylinder(radius=0.010, height=0.004, sections=24)
+    pad.apply_transform(trimesh.geometry.align_vectors([0, 0, 1], [1, 0, 0]))
+    pad.apply_translation((SHELL_BACK_X - 0.002, side * RAIL_Y, RAIL_Z))
+    return trimesh.boolean.union([rail, pad], engine="manifold")
+
+
+def strap_slots(pack: trimesh.Trimesh) -> trimesh.Trimesh:
+    """Vertical slots at the panel's side edges for the 20 mm velcro strap."""
+    cutters = []
+    for side in (1.0, -1.0):
+        slot = trimesh.creation.box(extents=(PANEL_T + 0.004, STRAP_T + 0.001, STRAP_W + 0.001))
+        slot.apply_translation((PANEL_X, side * (PANEL_W / 2 - 0.006), -0.010))
+        cutters.append(slot)
+    return trimesh.boolean.difference([pack] + cutters, engine="manifold")
 
 
 def carabiner(eye: np.ndarray) -> trimesh.Trimesh:
@@ -81,11 +95,50 @@ def export_both(mesh: trimesh.Trimesh, name: str) -> None:
     print(f"{name}: {len(mesh.vertices)} verts, watertight={mesh.is_watertight}")
 
 
+def strap_mesh() -> trimesh.Trimesh:
+    """Flat 20 mm velcro loop around the waist, threaded through the slots.
+
+    Belt geometry: 20 mm width runs VERTICAL (matches the slots, which are
+    cut for a belt threaded through them), 2 mm thick radially. The back
+    arc passes through the slot plane (x = PANEL_X), front and sides hug
+    the torso shell (back -47 mm, front +30 mm, hips ±47 mm).
+    """
+    xf, xb, hw, zc = 0.035, abs(PANEL_X) + 0.003, 0.050, -0.010
+    n = 96
+    ang = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    a = (xf + xb) / 2 + (xf - xb) / 2 * np.cos(ang)
+    x, y = a * np.cos(ang), hw * np.sin(ang)
+    pts = np.stack([x, y, np.full_like(x, zc)], axis=1)
+    tang = np.gradient(np.stack([x, y], axis=1), ang, axis=0)
+    tang /= np.linalg.norm(tang, axis=1, keepdims=True)
+    outward = np.stack([tang[:, 1], -tang[:, 0]], axis=1)   # radial, horizontal
+    zhat = np.tile(np.array([[0.0, 0.0, 1.0]]), (n, 1))
+    n3 = np.stack([outward[:, 0], outward[:, 1], np.zeros(n)], axis=1)
+    verts = np.concatenate([
+        pts + (STRAP_T / 2) * n3 + (STRAP_W / 2) * zhat,
+        pts + (STRAP_T / 2) * n3 - (STRAP_W / 2) * zhat,
+        pts - (STRAP_T / 2) * n3 - (STRAP_W / 2) * zhat,
+        pts - (STRAP_T / 2) * n3 + (STRAP_W / 2) * zhat,
+    ])
+    faces = []
+    for i in range(n):
+        j = (i + 1) % n
+        for k in range(4):
+            k2 = (k + 1) % 4
+            faces.append((k * n + i, k * n + j, k2 * n + j))
+            faces.append((k * n + i, k2 * n + j, k2 * n + i))
+    loop = trimesh.Trimesh(verts, np.array(faces), process=False)
+    trimesh.repair.fix_normals(loop)
+    return loop
+
+
 def main() -> None:
     parts = [rounded_panel(), rail(1.0), rail(-1.0), carabiner(EYE)]
     pack = trimesh.boolean.union(parts, engine="manifold")
+    pack = strap_slots(pack)
     trimesh.repair.fix_normals(pack)
     export_both(pack, "tug_towpack")
+    export_both(strap_mesh(), "tug_strap")
     print(f"one-piece pack: {len(pack.vertices)} verts, "
           f"{len(pack.faces)} faces, watertight={pack.is_watertight}, "
           f"volume={abs(pack.volume) * 1e3:.1f} cm^3")

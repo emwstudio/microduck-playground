@@ -259,7 +259,8 @@ def _add_rig_materials(spec: mujoco.MjSpec) -> None:
 def _load_hook_stls(spec: mujoco.MjSpec) -> None:
     """Parametric rig parts from hardware/tug-rig (STL, trunk-local)."""
     for mesh_name, filename in (("tug_hook_steel_stl", "tug_towpack.stl"),
-                                ("tug_chest_carabiner_stl", "tug_chest_carabiner.stl")):
+                                ("tug_chest_carabiner_stl", "tug_chest_carabiner.stl"),
+                                ("tug_strap_stl", "tug_strap.stl")):
         spec.add_mesh(name=mesh_name, file=str(_ROBOT_DIR / "assets" / filename))
 
 
@@ -332,6 +333,17 @@ def _add_harness_rings(spec: mujoco.MjSpec, n_per_team: int) -> None:
             type=mujoco.mjtGeom.mjGEOM_MESH,
             meshname="tug_belly",
             material="tug_twist",
+            contype=0,
+            conaffinity=0,
+            density=0.0,
+        )
+        # 20 mm webbing strap through the pack's slots, around the waist —
+        # this is what actually fastens the pack to the duck (removable).
+        trunk.add_geom(
+            name=f"{prefix}tug_strap",
+            type=mujoco.mjtGeom.mjGEOM_MESH,
+            meshname="tug_strap_stl",
+            material="tug_webbing",
             contype=0,
             conaffinity=0,
             density=0.0,
