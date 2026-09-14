@@ -108,6 +108,12 @@ def _add_rope_sites(spec: mujoco.MjSpec, team: str) -> None:
         size=(0.004,),
         rgba=ROPE_RGBA,
     )
+    trunk.add_site(
+        name="rope_hook_chest",
+        pos=tuple(chest_local(team)),
+        size=(0.004,),
+        rgba=ROPE_RGBA,
+    )
 
 
 def _link_side_pairs(pa: str, pb: str, red: list[str]) -> tuple[tuple[str, str], ...]:
@@ -226,6 +232,7 @@ RING_LOCAL_Y = 0.0             # centred on the spine
 RING_INNER_W = 0.030           # obround opening (y) — 16 mm rope + clearance
 RING_INNER_H = 0.020           # obround opening (z)
 RING_TUBE = 0.0035             # chunky enough to read at 720p
+CHEST_LOCAL = np.array([0.030, 0.0, -0.030])   # frame-front carabiner eye
 
 
 SPAWN_Y = TEAM_Y
@@ -233,6 +240,10 @@ SPAWN_Y = TEAM_Y
 
 def ring_local(team: str) -> np.ndarray:
     return np.array([RING_LOCAL_X, RING_LOCAL_Y, RING_LOCAL_Z])
+
+
+def chest_local(team: str) -> np.ndarray:
+    return CHEST_LOCAL.copy()
 ROPE_PLY_CENTER_R = 0.0042   # 3-ply rope ~18 mm overall — chunky like the reference
 ROPE_PLY_TUBE_R = 0.0048
 ROPE_PLY_TWISTS_PER_TURN = 4  # ply rotations per coil turn
@@ -387,71 +398,63 @@ def _add_rig_materials(spec: mujoco.MjSpec) -> None:
     orange.shininess = 0.6
 
 
-def _dring_mesh(spec: mujoco.MjSpec, name: str = "tug_dring",
-                segments: int = 40) -> None:
-    """Obround (stadium) D-ring in the y-z plane, opening facing ±x so the
-    rope threads through along the team axis."""
-    verts: list[tuple[float, float, float]] = []
-    faces: list[tuple[int, int, int]] = []
-    tube_segs = 6
-    hw, hh = RING_INNER_W / 2.0, RING_INNER_H / 2.0
-    for i in range(segments):
-        t = i / segments
-        ang = 2.0 * np.pi * t
-        # stadium outline: circle of radius hh offset ±(hw-hh) along y
-        cy = (hw - hh) * np.sign(np.cos(ang)) if abs(np.cos(ang)) > 1e-9 else 0.0
-        y = cy + hh * np.cos(ang) * (1 if abs(np.cos(ang)) > 1e-9 else np.sign(np.cos(ang)) or 1.0)
-        y = (hw - hh) * np.tanh(8 * np.cos(ang)) + hh * np.cos(ang)
-        z = hh * np.sin(ang)
-        out = np.array([0.0, y, z])
-        nrm = np.array([0.0, y - (hw - hh) * np.tanh(8 * np.cos(ang)), z])
-        n = np.linalg.norm(nrm)
-        nrm = nrm / n if n > 1e-9 else np.array([0.0, 0.0, 1.0])
-        side = np.array([1.0, 0.0, 0.0])
-        for j in range(tube_segs):
-            beta = 2.0 * np.pi * j / tube_segs
-            point = out + RING_TUBE * (np.cos(beta) * nrm + np.sin(beta) * side)
+def _load_hook_stls(spec: mujoco.MjSpec) -> None:
+    """Parametric rig parts from hardware/tug-rig (STL, trunk-local)."""
+    for mesh_name, filename in (("tug_hook_steel_stl", "tug_hook_steel.stl"),
+                                ("tug_hook_carabiner_stl", "tug_hook_carabiner.stl"),
+                                ("tug_chest_carabiner_stl", "tug_chest_carabiner.stl")):
+        spec.add_mesh(name=mesh_name, file=str(_ROBOT_DIR / "assets" / filename))
+
+
+def _belly_rope_mesh(spec: mujoco.MjSpec, name: str = "tug_belly") -> None:
+    """The harness's own rope: butt ring → chest ring, dipping under the
+    belly like a climbing harness's tie-in loop."""
+    a = ring_local("red")
+    b = CHEST_LOCAL
+    n = 18
+    t = np.linspace(0.0, 1.0, n)
+    points = a[None, :] + (b - a)[None, :] * t[:, None]
+    points[:, 2] -= 4.0 * 0.006 * t * (1.0 - t)   # slight under-belly dip
+    tube = 0.004
+    alphas = 2.0 * np.pi * np.arange(8) / 8
+    verts, faces = [], []
+    tangents = np.gradient(points, axis=0)
+    tangents /= np.linalg.norm(tangents, axis=1, keepdims=True)
+    ref = np.tile(np.array([0.0, 0.0, 1.0]), (n, 1))
+    u = ref - (ref * tangents).sum(axis=1, keepdims=True) * tangents
+    u /= np.linalg.norm(u, axis=1, keepdims=True)
+    w = np.cross(tangents, u)
+    for i in range(n):
+        for j in range(8):
+            point = points[i] + tube * (np.cos(alphas[j]) * u[i] + np.sin(alphas[j]) * w[i])
             verts.append(tuple(point))
-    for i in range(segments):
-        i2 = (i + 1) % segments
-        for j in range(tube_segs):
-            j2 = (j + 1) % tube_segs
-            a = i * tube_segs + j
-            b = i2 * tube_segs + j
-            c = i2 * tube_segs + j2
-            d = i * tube_segs + j2
-            faces.append((a, b, c))
-            faces.append((a, c, d))
+    for i in range(n - 1):
+        for j in range(8):
+            j2 = (j + 1) % 8
+            aa = i * 8 + j
+            bb = (i + 1) * 8 + j
+            cc = (i + 1) * 8 + j2
+            dd = i * 8 + j2
+            faces.append((aa, bb, cc))
+            faces.append((aa, cc, dd))
+    uvs = np.zeros((n * 8, 2))
+    uvs[:, 0] = np.repeat(t * 3.0, 8)
+    uvs[:, 1] = np.tile(alphas / (2 * np.pi), n)
     mesh = spec.add_mesh(name=name)
     mesh.uservert = np.array(verts, dtype=np.float32).flatten()
     mesh.userface = np.array(faces, dtype=np.int32).flatten()
+    mesh.usertexcoord = uvs.flatten().astype(np.float32)
 
 
 def _add_harness_rings(spec: mujoco.MjSpec, n_per_team: int) -> None:
     red, blue = team_prefixes(n_per_team)
     for prefix, team in [(p_, "red") for p_ in red] + [(p_, "blue") for p_ in blue]:
         trunk = _find_body(spec, f"{prefix}trunk_base")
-        eye = ring_local(team)
-        # base plate on the butt shell
-        plate_x = -0.041
+        # STL rig parts (hardware/tug-rig), baked in trunk-local coordinates.
         trunk.add_geom(
-            name=f"{prefix}tug_hook_plate",
-            type=mujoco.mjtGeom.mjGEOM_BOX,
-            size=(0.003, 0.016, 0.012),
-            pos=(plate_x, 0.0, -0.018),
-            material="tug_steel",
-            contype=0,
-            conaffinity=0,
-            density=0.0,
-        )
-        # standoff tube: plate -> carabiner eye, along x
-        mid_x = (plate_x + eye[0]) / 2.0
-        trunk.add_geom(
-            name=f"{prefix}tug_dring_stud",
-            type=mujoco.mjtGeom.mjGEOM_CYLINDER,
-            size=(0.0025, abs(eye[0] - plate_x) / 2.0, 0.0),
-            pos=(mid_x, 0.0, eye[2]),
-            quat=(0.7071, 0.0, 0.7071, 0.0),   # cylinder z → x
+            name=f"{prefix}tug_hook_steel",
+            type=mujoco.mjtGeom.mjGEOM_MESH,
+            meshname="tug_hook_steel_stl",
             material="tug_steel",
             contype=0,
             conaffinity=0,
@@ -460,9 +463,27 @@ def _add_harness_rings(spec: mujoco.MjSpec, n_per_team: int) -> None:
         trunk.add_geom(
             name=f"{prefix}tug_dring",
             type=mujoco.mjtGeom.mjGEOM_MESH,
-            meshname="tug_dring",
+            meshname="tug_hook_carabiner_stl",
             material="tug_carabiner",
-            pos=tuple(eye),
+            contype=0,
+            conaffinity=0,
+            density=0.0,
+        )
+        trunk.add_geom(
+            name=f"{prefix}tug_chest_ring",
+            type=mujoco.mjtGeom.mjGEOM_MESH,
+            meshname="tug_chest_carabiner_stl",
+            material="tug_carabiner",
+            contype=0,
+            conaffinity=0,
+            density=0.0,
+        )
+        # harness belly connector: the rope under the belly, butt ring → chest ring
+        trunk.add_geom(
+            name=f"{prefix}tug_belly_rope",
+            type=mujoco.mjtGeom.mjGEOM_MESH,
+            meshname="tug_belly",
+            material="tug_twist",
             contype=0,
             conaffinity=0,
             density=0.0,
@@ -510,6 +531,18 @@ class SpanVisual:
     variant_mesh_ids: np.ndarray  # (len(CHORD_BINS), len(SAG_BINS))
 
 
+def _span_hook_sites(pa: str, pb: str, red: list[str]) -> tuple[str, str]:
+    """Force path through the duck: pulled at the butt, pulls with the
+    chest. Each span uses the hooks facing each other — butt on the
+    centre side, chest on the away side."""
+    pa_red, pb_red = pa in red, pb in red
+    if pa_red and pb_red:
+        return "rope_hook", "rope_hook_chest"
+    if pa_red and not pb_red:
+        return "rope_hook", "rope_hook"
+    return "rope_hook_chest", "rope_hook"
+
+
 def resolve_rope_visuals(model: mujoco.MjModel, n_per_team: int,
                          spacing: float = DUCK_SPACING,
                          gap: float = CENTER_GAP) -> list[SpanVisual]:
@@ -524,13 +557,16 @@ def resolve_rope_visuals(model: mujoco.MjModel, n_per_team: int,
              for si in range(len(SAG_BINS))]
             for ci in range(len(CHORD_BINS))
         ])
+        site_a, site_b = _span_hook_sites(pa, pb, red)
+        team_a = "red" if pa in red else "blue"
+        team_b = "red" if pb in red else "blue"
         spans.append(SpanVisual(
             body_id=body_id,
             geom_id=geom_id,
             trunk_a_id=mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{pa}trunk_base"),
             trunk_b_id=mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{pb}trunk_base"),
-            local_a=ring_local("red" if pa in red else "blue").copy(),
-            local_b=ring_local("red" if pb in red else "blue").copy(),
+            local_a=(ring_local(team_a) if site_a == "rope_hook" else chest_local(team_a)).copy(),
+            local_b=(ring_local(team_b) if site_b == "rope_hook" else chest_local(team_b)).copy(),
             nominal=(gap if pa == red[0] else spacing),
             variant_mesh_ids=variant_ids,
         ))
@@ -778,6 +814,7 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
     for pa, pb in zip(chain[:-1], chain[1:]):
         nominal = gap if pa == red[0] else spacing
         link_len = nominal + ROPE_SLACK
+        site_a, site_b = _span_hook_sites(pa, pb, red)
         cord = parent.add_tendon(
             name=f"tug_{pa or 'r0_'}{pb}cord",
             stiffness=ROPE_STIFFNESS,
@@ -790,8 +827,8 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
             solref_limit=(0.02, 1.0),
             solimp_limit=(0.90, 0.95, 0.001, 0.5, 2.0),
         )
-        cord.wrap_site(f"{pa}rope_hook")
-        cord.wrap_site(f"{pb}rope_hook")
+        cord.wrap_site(f"{pa}{site_a}")
+        cord.wrap_site(f"{pb}{site_b}")
 
     _add_hemp_material(parent)
     _matte_floor(parent)
@@ -802,7 +839,8 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
                        sub_fibers=5, flyaway=110)
     _add_waist_wraps(parent, n_per_team)
     _add_rig_materials(parent)
-    _dring_mesh(parent)
+    _belly_rope_mesh(parent)
+    _load_hook_stls(parent)
     _add_harness_rings(parent, n_per_team)
     _build_span_variants(parent)
     n_strands = 2 * n_per_team - 1
