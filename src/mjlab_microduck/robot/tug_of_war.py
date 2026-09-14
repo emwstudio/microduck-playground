@@ -100,18 +100,11 @@ def _tint_shells(spec: mujoco.MjSpec, rgba: tuple[float, float, float, float]) -
             mat.rgba = rgba
 
 
-def _add_rope_sites(spec: mujoco.MjSpec) -> None:
+def _add_rope_sites(spec: mujoco.MjSpec, team: str) -> None:
     trunk = _find_body(spec, "trunk_base")
-    for side, y in (("left", ROPE_SITE_Y), ("right", -ROPE_SITE_Y)):
-        trunk.add_site(
-            name=f"rope_{side}",
-            pos=(0.0, y, ROPE_SITE_Z),
-            size=(0.004,),
-            rgba=ROPE_RGBA,
-        )
     trunk.add_site(
-        name="rope_chest",
-        pos=(ROPE_CHEST_X, 0.0, ROPE_SITE_Z),
+        name="rope_hook",
+        pos=tuple(ring_local(team)),
         size=(0.004,),
         rgba=ROPE_RGBA,
     )
@@ -220,6 +213,27 @@ WRAP_TILT = np.radians(12.0)   # coil plane tips up toward the duck's back
 WRAP_JITTER = 0.0015           # per-turn radius/z wobble — kills the CNC look
 WRAP_FRONT_LOCAL = np.array([WRAP_ELLIPSE_X, 0.0, WRAP_Z1])
 WRAP_BACK_LOCAL = np.array([-WRAP_ELLIPSE_X, 0.0, WRAP_Z0])
+
+# Harness D-ring: every duck stands TEAM_Y behind the straight rope line
+# (y=0, camera side) — real tug teams stand behind the rope, not on it.
+# A steel D-ring on a short stud reaches from the harness to the line and
+# the rope threads straight through every ring. Red ducks yaw 180 deg, so
+# their local y flips sign to land the ring on world y=0.
+TEAM_Y = -0.055
+RING_LOCAL_X = -0.045          # centre side of the harness (toward the opponent)
+RING_LOCAL_Z = -0.005          # hip height
+RING_LOCAL_Y = 0.055           # magnitude; sign flips per team yaw
+RING_INNER_W = 0.026           # obround opening (y)
+RING_INNER_H = 0.016           # obround opening (z)
+RING_TUBE = 0.0018
+
+
+SPAWN_Y = TEAM_Y
+
+
+def ring_local(team: str) -> np.ndarray:
+    side = -RING_LOCAL_Y if team == "red" else RING_LOCAL_Y
+    return np.array([RING_LOCAL_X, side, RING_LOCAL_Z])
 ROPE_PLY_CENTER_R = 0.0042   # 3-ply rope ~18 mm overall — chunky like the reference
 ROPE_PLY_TUBE_R = 0.0048
 ROPE_PLY_TWISTS_PER_TURN = 4  # ply rotations per coil turn
@@ -359,6 +373,87 @@ def _twisted_tube_mesh(spec: mujoco.MjSpec, name: str,
     mesh.usertexcoord = np.array(uvs, dtype=np.float32).flatten()
 
 
+def _add_rig_materials(spec: mujoco.MjSpec) -> None:
+    webbing = spec.add_material(name="tug_webbing")
+    webbing.rgba = (0.16, 0.16, 0.18, 1.0)   # dark nylon harness
+    webbing.specular = 0.15
+    webbing.shininess = 0.1
+    steel = spec.add_material(name="tug_steel")
+    steel.rgba = (0.68, 0.70, 0.74, 1.0)
+    steel.specular = 0.9
+    steel.shininess = 0.7
+
+
+def _dring_mesh(spec: mujoco.MjSpec, name: str = "tug_dring",
+                segments: int = 40) -> None:
+    """Obround (stadium) D-ring in the y-z plane, opening facing ±x so the
+    rope threads through along the team axis."""
+    verts: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int]] = []
+    tube_segs = 6
+    hw, hh = RING_INNER_W / 2.0, RING_INNER_H / 2.0
+    for i in range(segments):
+        t = i / segments
+        ang = 2.0 * np.pi * t
+        # stadium outline: circle of radius hh offset ±(hw-hh) along y
+        cy = (hw - hh) * np.sign(np.cos(ang)) if abs(np.cos(ang)) > 1e-9 else 0.0
+        y = cy + hh * np.cos(ang) * (1 if abs(np.cos(ang)) > 1e-9 else np.sign(np.cos(ang)) or 1.0)
+        y = (hw - hh) * np.tanh(8 * np.cos(ang)) + hh * np.cos(ang)
+        z = hh * np.sin(ang)
+        out = np.array([0.0, y, z])
+        nrm = np.array([0.0, y - (hw - hh) * np.tanh(8 * np.cos(ang)), z])
+        n = np.linalg.norm(nrm)
+        nrm = nrm / n if n > 1e-9 else np.array([0.0, 0.0, 1.0])
+        side = np.array([1.0, 0.0, 0.0])
+        for j in range(tube_segs):
+            beta = 2.0 * np.pi * j / tube_segs
+            point = out + RING_TUBE * (np.cos(beta) * nrm + np.sin(beta) * side)
+            verts.append(tuple(point))
+    for i in range(segments):
+        i2 = (i + 1) % segments
+        for j in range(tube_segs):
+            j2 = (j + 1) % tube_segs
+            a = i * tube_segs + j
+            b = i2 * tube_segs + j
+            c = i2 * tube_segs + j2
+            d = i * tube_segs + j2
+            faces.append((a, b, c))
+            faces.append((a, c, d))
+    mesh = spec.add_mesh(name=name)
+    mesh.uservert = np.array(verts, dtype=np.float32).flatten()
+    mesh.userface = np.array(faces, dtype=np.int32).flatten()
+
+
+def _add_harness_rings(spec: mujoco.MjSpec, n_per_team: int) -> None:
+    red, blue = team_prefixes(n_per_team)
+    for prefix, team in [(p_, "red") for p_ in red] + [(p_, "blue") for p_ in blue]:
+        trunk = _find_body(spec, f"{prefix}trunk_base")
+        eye = ring_local(team)
+        stud_y = np.sign(eye[1]) * 0.045   # harness side surface
+        trunk.add_geom(
+            name=f"{prefix}tug_dring",
+            type=mujoco.mjtGeom.mjGEOM_MESH,
+            meshname="tug_dring",
+            material="tug_steel",
+            pos=tuple(eye),
+            contype=0,
+            conaffinity=0,
+            density=0.0,
+        )
+        # stud: short steel arm from the harness side to the ring
+        trunk.add_geom(
+            name=f"{prefix}tug_dring_stud",
+            type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+            size=(0.0022, 0.5 * abs(eye[1] - stud_y) + 0.004, 0.0),
+            pos=(eye[0], (eye[1] + stud_y) / 2.0, eye[2]),
+            quat=(0.7071, 0.7071, 0.0, 0.0),   # cylinder z → y
+            material="tug_steel",
+            contype=0,
+            conaffinity=0,
+            density=0.0,
+        )
+
+
 def _add_waist_wraps(spec: mujoco.MjSpec, n_per_team: int) -> None:
     red, blue = team_prefixes(n_per_team)
     for prefix in red + blue:
@@ -367,7 +462,7 @@ def _add_waist_wraps(spec: mujoco.MjSpec, n_per_team: int) -> None:
             name=f"{prefix}tug_wrap",
             type=mujoco.mjtGeom.mjGEOM_MESH,
             meshname="tug_wrap",
-            material="tug_hemp",
+            material="tug_webbing",
             contype=0,
             conaffinity=0,
             density=0.0,   # pure visual — no added mass or inertia
@@ -419,8 +514,8 @@ def resolve_rope_visuals(model: mujoco.MjModel, n_per_team: int,
             geom_id=geom_id,
             trunk_a_id=mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{pa}trunk_base"),
             trunk_b_id=mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{pb}trunk_base"),
-            local_a=WRAP_BACK_LOCAL.copy(),
-            local_b=WRAP_FRONT_LOCAL.copy(),
+            local_a=ring_local("red" if pa in red else "blue").copy(),
+            local_b=ring_local("red" if pb in red else "blue").copy(),
             nominal=(gap if pa == red[0] else spacing),
             variant_mesh_ids=variant_ids,
         ))
@@ -653,12 +748,12 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
 
     parent = mujoco.MjSpec.from_file(str(_SCENE_XML))
     _tint_shells(parent, red_rgba)          # unprefixed robot = red duck 0
-    _add_rope_sites(parent)
+    _add_rope_sites(parent, "red")
 
-    for prefix, rgba in [(p, red_rgba) for p in red[1:]] + [(p, blue_rgba) for p in blue]:
+    for prefix, rgba, team in [(p, red_rgba, "red") for p in red[1:]] + [(p, blue_rgba, "blue") for p in blue]:
         child = mujoco.MjSpec.from_file(str(_ROBOT_XML))
         _tint_shells(child, rgba)
-        _add_rope_sites(child)
+        _add_rope_sites(child, team)
         frame = parent.worldbody.add_frame()
         parent.attach(child, prefix=prefix, frame=frame)
 
@@ -668,21 +763,20 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
     for pa, pb in zip(chain[:-1], chain[1:]):
         nominal = gap if pa == red[0] else spacing
         link_len = nominal + ROPE_SLACK
-        for side_a, side_b in _link_side_pairs(pa, pb, red):
-            cord = parent.add_tendon(
-                name=f"tug_{pa or 'r0_'}{pb}cord_{side_a}",
-                stiffness=ROPE_STIFFNESS,
-                springlength=(0.0, link_len),
-                limited=True,
-                range=(0.0, link_len + ROPE_LIMIT_MARGIN),
-                width=ROPE_WIDTH,
-                rgba=ROPE_RGBA,
-                group=4,  # physics only; the hemp mocap geoms do the visuals
-                solref_limit=(0.02, 1.0),
-                solimp_limit=(0.90, 0.95, 0.001, 0.5, 2.0),
-            )
-            cord.wrap_site(f"{pa}rope_{side_a}")
-            cord.wrap_site(f"{pb}rope_{side_b}")
+        cord = parent.add_tendon(
+            name=f"tug_{pa or 'r0_'}{pb}cord",
+            stiffness=ROPE_STIFFNESS,
+            springlength=(0.0, link_len),
+            limited=True,
+            range=(0.0, link_len + ROPE_LIMIT_MARGIN),
+            width=ROPE_WIDTH,
+            rgba=ROPE_RGBA,
+            group=4,  # physics only; the swept variants do the visuals
+            solref_limit=(0.02, 1.0),
+            solimp_limit=(0.90, 0.95, 0.001, 0.5, 2.0),
+        )
+        cord.wrap_site(f"{pa}rope_hook")
+        cord.wrap_site(f"{pb}rope_hook")
 
     _add_hemp_material(parent)
     _matte_floor(parent)
@@ -692,6 +786,9 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
                        twists=WRAP_TURNS * ROPE_PLY_TWISTS_PER_TURN, uv_repeats=14.0,
                        sub_fibers=5, flyaway=110)
     _add_waist_wraps(parent, n_per_team)
+    _add_rig_materials(parent)
+    _dring_mesh(parent)
+    _add_harness_rings(parent, n_per_team)
     _build_span_variants(parent)
     n_strands = 2 * n_per_team - 1
     for idx in range(n_strands):
