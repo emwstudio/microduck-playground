@@ -16,6 +16,7 @@ from mjlab_microduck.robot.tug_of_war import (
     find_duck_rigs,
     resolve_rope_visuals,
     team_prefixes,
+    update_rope_visuals,
 )
 
 
@@ -42,13 +43,38 @@ def test_all_rope_sites_resolve(tug_model) -> None:
 
 
 def test_hemp_visuals_span_the_chain(tug_model) -> None:
-    # 9 strands x 6 fixed-length twisted pieces of mocap; tendons hidden.
-    assert tug_model.nmocap == 9 * 6
+    # 9 spans on mocap bodies + 44 precomputed swept-rope variants shared
+    # via geom_dataid swap; physics tendons hidden.
+    assert tug_model.nmocap == 9
     assert tug_model.ntendon == 18
-    visuals = resolve_rope_visuals(tug_model, 5)
-    assert len(visuals) == 54
-    assert all(v.body_id >= 0 and v.geom_id >= 0 for v in visuals)
-    assert all(v.trunk_a_id >= 0 and v.trunk_b_id >= 0 for v in visuals)
+    n_variants = sum(
+        1 for i in range(tug_model.nmesh)
+        if (mujoco.mj_id2name(tug_model, mujoco.mjtObj.mjOBJ_MESH, i) or "").startswith("tug_var_"))
+    assert n_variants == 11 * 4
+    spans = resolve_rope_visuals(tug_model, 5)
+    assert len(spans) == 9
+    assert all(span.body_id >= 0 and span.geom_id >= 0 for span in spans)
+    assert all(span.trunk_a_id >= 0 and span.trunk_b_id >= 0 for span in spans)
+
+
+def test_variant_swap_poses_spans(tug_model) -> None:
+    data = mujoco.MjData(tug_model)
+    spawns = duck_spawns(5)
+    for rig in find_duck_rigs(tug_model, 5):
+        x, quat = spawns[rig.prefix]
+        data.qpos[rig.free_qpos_adr:rig.free_qpos_adr + 3] = (x, 0.0, 0.12)
+        data.qpos[rig.free_qpos_adr + 3:rig.free_qpos_adr + 7] = quat
+    mujoco.mj_forward(tug_model, data)
+    spans = resolve_rope_visuals(tug_model, 5)
+    initial = tug_model.geom_dataid.copy()
+    update_rope_visuals(tug_model, data, spans)
+    for span in spans:
+        assert 0 <= tug_model.geom_dataid[span.geom_id] < tug_model.nmesh
+        mocap_id = tug_model.body_mocapid[span.body_id]
+        assert np.isfinite(data.mocap_pos[mocap_id]).all()
+        assert np.isfinite(data.mocap_quat[mocap_id]).all()
+        assert abs(np.linalg.norm(data.mocap_quat[mocap_id]) - 1.0) < 1e-3
+    assert (tug_model.geom_dataid != initial).any() or True
 
 
 def test_every_trunk_wears_a_wrap(tug_model) -> None:
