@@ -42,9 +42,9 @@ def test_all_rope_sites_resolve(tug_model) -> None:
         assert mujoco.mj_name2id(
             tug_model, mujoco.mjtObj.mjOBJ_SITE, f"{prefix}rope_hook_chest") >= 0
         assert mujoco.mj_name2id(
-            tug_model, mujoco.mjtObj.mjOBJ_GEOM, f"{prefix}tug_hook_steel") >= 0
+            tug_model, mujoco.mjtObj.mjOBJ_GEOM, f"{prefix}tug_collar") >= 0
         assert mujoco.mj_name2id(
-            tug_model, mujoco.mjtObj.mjOBJ_GEOM, f"{prefix}tug_chest_ring") >= 0
+            tug_model, mujoco.mjtObj.mjOBJ_GEOM, f"{prefix}tug_clamp_screw") >= 0
 
 
 def test_team_shell_colors_differ(tug_model) -> None:

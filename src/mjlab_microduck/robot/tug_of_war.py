@@ -110,16 +110,14 @@ SPAN_T_SEGMENTS = 26
 SPAN_ALPHA_SEGMENTS = 6
 
 
-# Harness ring geometry: butt carabiner 3 cm aft of the butt shell at hip
-# height (rope line z ~0.085 world), chest carabiner on the belly shell.
+# Harness geometry: clamp collar (hardware/tug-rig/cad_collar.py) — one band
+# around the torso shell, screw-tightened on the side, tow eyes integrated
+# front (chest pull) and back (butt pull). Sites sit at the eye centres.
 TEAM_Y = 0.0
-RING_LOCAL_X = -0.065
-RING_LOCAL_Z = -0.030
+RING_LOCAL_X = -0.053
+RING_LOCAL_Z = -0.010
 RING_LOCAL_Y = 0.0
-RING_INNER_W = 0.030
-RING_INNER_H = 0.020
-RING_TUBE = 0.0035
-CHEST_LOCAL = np.array([0.030, 0.0, -0.030])
+CHEST_LOCAL = np.array([0.039, 0.0, -0.010])
 SPAWN_Y = TEAM_Y
 
 
@@ -258,92 +256,32 @@ def _add_rig_materials(spec: mujoco.MjSpec) -> None:
 
 def _load_hook_stls(spec: mujoco.MjSpec) -> None:
     """Parametric rig parts from hardware/tug-rig (STL, trunk-local)."""
-    for mesh_name, filename in (("tug_hook_steel_stl", "tug_towpack.stl"),
-                                ("tug_chest_carabiner_stl", "tug_chest_carabiner.stl"),
-                                ("tug_strap_stl", "tug_strap.stl")):
+    for mesh_name, filename in (("tug_collar_stl", "tug_collar.stl"),
+                                ("tug_clamp_screw_stl", "tug_clamp_screw.stl")):
         spec.add_mesh(name=mesh_name, file=str(_ROBOT_DIR / "assets" / filename))
-
-
-def _belly_rope_mesh(spec: mujoco.MjSpec, name: str = "tug_belly") -> None:
-    """The harness's own rope: butt ring → chest ring, dipping under the
-    belly like a climbing harness's tie-in loop."""
-    a = ring_local("red")
-    b = CHEST_LOCAL
-    n = 18
-    t = np.linspace(0.0, 1.0, n)
-    points = a[None, :] + (b - a)[None, :] * t[:, None]
-    points[:, 2] -= 4.0 * 0.006 * t * (1.0 - t)   # slight under-belly dip
-    tube = 0.004
-    alphas = 2.0 * np.pi * np.arange(8) / 8
-    verts, faces = [], []
-    tangents = np.gradient(points, axis=0)
-    tangents /= np.linalg.norm(tangents, axis=1, keepdims=True)
-    ref = np.tile(np.array([0.0, 0.0, 1.0]), (n, 1))
-    u = ref - (ref * tangents).sum(axis=1, keepdims=True) * tangents
-    u /= np.linalg.norm(u, axis=1, keepdims=True)
-    w = np.cross(tangents, u)
-    for i in range(n):
-        for j in range(8):
-            point = points[i] + tube * (np.cos(alphas[j]) * u[i] + np.sin(alphas[j]) * w[i])
-            verts.append(tuple(point))
-    for i in range(n - 1):
-        for j in range(8):
-            j2 = (j + 1) % 8
-            aa = i * 8 + j
-            bb = (i + 1) * 8 + j
-            cc = (i + 1) * 8 + j2
-            dd = i * 8 + j2
-            faces.append((aa, bb, cc))
-            faces.append((aa, cc, dd))
-    uvs = np.zeros((n * 8, 2))
-    uvs[:, 0] = np.repeat(t * 3.0, 8)
-    uvs[:, 1] = np.tile(alphas / (2 * np.pi), n)
-    mesh = spec.add_mesh(name=name)
-    mesh.uservert = np.array(verts, dtype=np.float32).flatten()
-    mesh.userface = np.array(faces, dtype=np.int32).flatten()
-    mesh.usertexcoord = uvs.flatten().astype(np.float32)
 
 
 def _add_harness_rings(spec: mujoco.MjSpec, n_per_team: int) -> None:
     red, blue = team_prefixes(n_per_team)
     for prefix, team in [(p_, "red") for p_ in red] + [(p_, "blue") for p_ in blue]:
         trunk = _find_body(spec, f"{prefix}trunk_base")
-        # STL rig parts (hardware/tug-rig), baked in trunk-local coordinates.
+        # Clamp collar (hardware/tug-rig/cad_collar.py), trunk-local: one
+        # band around the torso, tightened by the side screw, with the tow
+        # eyes integrated front and back.
         trunk.add_geom(
-            name=f"{prefix}tug_hook_steel",
+            name=f"{prefix}tug_collar",
             type=mujoco.mjtGeom.mjGEOM_MESH,
-            meshname="tug_hook_steel_stl",
+            meshname="tug_collar_stl",
             material="tug_frame_paint",
             contype=0,
             conaffinity=0,
             density=0.0,
         )
         trunk.add_geom(
-            name=f"{prefix}tug_chest_ring",
+            name=f"{prefix}tug_clamp_screw",
             type=mujoco.mjtGeom.mjGEOM_MESH,
-            meshname="tug_chest_carabiner_stl",
-            material="tug_carabiner",
-            contype=0,
-            conaffinity=0,
-            density=0.0,
-        )
-        # harness belly connector: the rope under the belly, butt ring → chest ring
-        trunk.add_geom(
-            name=f"{prefix}tug_belly_rope",
-            type=mujoco.mjtGeom.mjGEOM_MESH,
-            meshname="tug_belly",
-            material="tug_twist",
-            contype=0,
-            conaffinity=0,
-            density=0.0,
-        )
-        # 20 mm webbing strap through the pack's slots, around the waist —
-        # this is what actually fastens the pack to the duck (removable).
-        trunk.add_geom(
-            name=f"{prefix}tug_strap",
-            type=mujoco.mjtGeom.mjGEOM_MESH,
-            meshname="tug_strap_stl",
-            material="tug_webbing",
+            meshname="tug_clamp_screw_stl",
+            material="tug_steel",
             contype=0,
             conaffinity=0,
             density=0.0,
@@ -665,7 +603,6 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
     _matte_floor(parent)
     _add_tug_lighting(parent)
     _add_rig_materials(parent)
-    _belly_rope_mesh(parent)
     _load_hook_stls(parent)
     _add_harness_rings(parent, n_per_team)
     _build_span_variants(parent)
