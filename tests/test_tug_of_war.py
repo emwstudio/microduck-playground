@@ -40,7 +40,11 @@ def test_all_rope_sites_resolve(tug_model) -> None:
         assert mujoco.mj_name2id(
             tug_model, mujoco.mjtObj.mjOBJ_SITE, f"{prefix}rope_hook") >= 0
         assert mujoco.mj_name2id(
+            tug_model, mujoco.mjtObj.mjOBJ_SITE, f"{prefix}rope_hook_chest") >= 0
+        assert mujoco.mj_name2id(
             tug_model, mujoco.mjtObj.mjOBJ_GEOM, f"{prefix}tug_dring") >= 0
+        assert mujoco.mj_name2id(
+            tug_model, mujoco.mjtObj.mjOBJ_GEOM, f"{prefix}tug_chest_ring") >= 0
 
 
 def test_hemp_visuals_span_the_chain(tug_model) -> None:
