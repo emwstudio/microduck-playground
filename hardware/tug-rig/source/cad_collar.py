@@ -33,8 +33,8 @@ BAND_H, BAND_T = 0.014, 0.0022     # band cross-section: vertical × radial
 GAP_HALF = 0.21                     # split half-angle at the +y side (~18 mm gap, ~13 mm between lug faces)
 
 # --- clamp hardware ---
-LUG_W, LUG_OUT, LUG_H = 0.005, 0.012, 0.008   # slim cantilever arms reaching outside the ring
-SCREW_OUT = 0.009                   # screw axis this far beyond the band surface (outside the ring)
+LUG_W, LUG_OUT, LUG_H = 0.005, 0.020, 0.008   # slim cantilever arms reaching well outside the ring
+SCREW_OUT = 0.016                   # screw axis ~14 mm outside the band surface — hex key access with zero obstruction
 HOLE_R = 0.0016                     # Ø3.2 mm clearance hole through the lugs
 SCREW_R, SCREW_LEN = 0.0015, 0.024
 HEAD_R, HEAD_H = 0.00275, 0.003    # M3 socket head: Ø5.5 × 3 mm
