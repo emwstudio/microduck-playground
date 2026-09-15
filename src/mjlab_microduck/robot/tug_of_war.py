@@ -442,6 +442,16 @@ def _sweep_smooth(points: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarra
             d = i * SPAN_SMOOTH_ALPHA + j2
             faces.append((a, b, c))
             faces.append((a, c, d))
+    # End caps: an open tube end reads as a SEVERED rope (dark hollow ring).
+    for ring, tip_i, flip in ((0, 0, True), (n - 1, n - 1, False)):
+        tip = len(verts)
+        verts = np.vstack([verts, points[tip_i][None, :]])
+        normals = np.vstack([normals, -tangents[tip_i] if flip else tangents[tip_i]])
+        uvs = np.vstack([uvs, [tip_i / (n - 1), 0.5]])
+        for j in range(SPAN_SMOOTH_ALPHA):
+            j2 = (j + 1) % SPAN_SMOOTH_ALPHA
+            a, b = ring * SPAN_SMOOTH_ALPHA + j, ring * SPAN_SMOOTH_ALPHA + j2
+            faces.append((tip, a, b) if flip else (tip, b, a))
     return verts, normals, uvs, np.array(faces, dtype=np.int32)
 
 
@@ -570,10 +580,11 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         chord = float(np.linalg.norm(chord_vec))
         if chord < 1e-6:
             continue
-        # The rope ties off on each eye's NEAR rim (inside the knot coil),
-        # never touching the plate — pull each end back from the site
-        # toward the middle by EYE_MAJOR - SPAN_RADIUS.
-        back = EYE_RING_MAJOR - SPAN_RADIUS
+        # The rope ties off on each eye's NEAR rim, its tip buried inside
+        # the bight loop (pull each end back from the site toward the
+        # middle by EYE_MAJOR - SPAN_RADIUS/2 — 0.5 mm clear of the rim,
+        # deep in the loop so the joint reads solid, not severed).
+        back = EYE_RING_MAJOR - SPAN_RADIUS / 2
         chord_vec /= chord
         e0 = p0 + chord_vec * back
         e1 = p1 - chord_vec * back
