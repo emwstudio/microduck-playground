@@ -165,23 +165,29 @@ def lugs() -> trimesh.Trimesh:
 
 
 def tow_eye(center: np.ndarray) -> trimesh.Trimesh:
-    """Pad eye fused to the band as ONE solid "D": the ring's body-side is
-    a solid RECTANGULAR boss (10×14 mm) filling the whole gap between the
-    band and the ring's inner arc — the pull transfers through the full
-    rectangle, not a thin neck. The boss stops 0.5 mm short of the hole
-    channel so the Ø9 mm hole stays clear.
+    """One-piece pad-eye plate fused to the band (no torus + neck stack).
+
+    A flat plate (5 mm thick, in the xz plane) shaped like a lollipop: a
+    rectangular stem growing out of the band flares into a circular head
+    around the Ø9 mm hole; concave corners are filleted so the ring and
+    the boss read as ONE cast part.
     """
-    ring = trimesh.creation.torus(major_radius=EYE_MAJOR, minor_radius=EYE_TUBE,
-                                  major_sections=48, minor_sections=14)
-    ring.apply_transform(trimesh.geometry.align_vectors([0, 0, 1], [0, 1, 0]))
-    ring.apply_translation(center)
+    from shapely.geometry import Point, box as shapely_box
+    from shapely.ops import unary_union
     sign = 1.0 if center[0] > 0 else -1.0
     band_face = sign * (abs(center[0]) - 0.002 - EYE_MAJOR - EYE_TUBE)
-    neck_x0 = band_face - sign * BAND_T                       # inside the band
-    neck_x1 = center[0] - sign * (EYE_INNER_R + 0.0005)       # fill to 0.5 mm off the hole
-    boss = trimesh.creation.box(extents=(abs(neck_x1 - neck_x0), 0.010, BAND_H))
-    boss.apply_translation(((neck_x0 + neck_x1) / 2, 0.0, Z_C))
-    return trimesh.boolean.union([ring, boss], engine="manifold")
+    head = Point(float(center[0]), Z_C).buffer(EYE_MAJOR + EYE_TUBE, resolution=48)
+    stem = shapely_box(min(band_face - sign * BAND_T, center[0] + sign * 0.001),
+                       Z_C - 0.005,
+                       max(band_face - sign * BAND_T, center[0] + sign * 0.001),
+                       Z_C + 0.005)
+    outline = unary_union([head, stem]).buffer(0.001).buffer(-0.001)  # fillet the shoulders
+    hole = Point(float(center[0]), Z_C).buffer(EYE_INNER_R, resolution=40)
+    outline = outline.difference(hole)
+    plate = trimesh.creation.extrude_polygon(outline, EYE_TUBE * 2)
+    plate.apply_transform(trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0]))
+    plate.apply_translation((0.0, EYE_TUBE, 0.0))   # centre the plate on y=0
+    return plate
 
 
 def hole_gauge_ok(collar: trimesh.Trimesh) -> bool:
