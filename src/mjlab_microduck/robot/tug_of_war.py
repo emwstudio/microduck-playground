@@ -350,9 +350,10 @@ def _site_world(data: mujoco.MjData, body_id: int, local: np.ndarray,
 
 
 def _local_span_curve(chord: float, sag: float) -> np.ndarray:
-    """Sagging rope in its local frame: x from -chord/2..+chord/2 (8% into
-    the wraps on both ends), -z parabola, slight lateral bow."""
-    t = np.linspace(-0.08, 1.08, SPAN_T_SEGMENTS)
+    """Sagging rope in its local frame: x from -chord/2..+chord/2 (ends AT
+    the wrap sites — the knot lumps hide the tips; an 8% overshoot used to
+    stick out of the ring like a horn), -z parabola, slight lateral bow."""
+    t = np.linspace(0.0, 1.0, SPAN_T_SEGMENTS)
     points = np.zeros((SPAN_T_SEGMENTS, 3))
     points[:, 0] = (t - 0.5) * chord
     points[:, 2] = -4.0 * sag * t * (1.0 - t)
@@ -363,14 +364,14 @@ def _local_span_curve(chord: float, sag: float) -> np.ndarray:
 SPAN_RADIUS = 0.004   # Ø8 mm rope — threads the Ø9 mm pad-eye holes cleanly
 
 EYE_RING_MAJOR = 0.008   # pad-eye ring radius (mirrors hardware/tug-rig/cad_collar.py EYE_MAJOR)
-KNOT_MAJOR = 0.0052      # rope donut cinching the eye's outer bar (lark's head)
+KNOT_MAJOR = 0.0045      # rope coil cinching the eye's outer bar (lark's head)
 
 
 def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
-    """Rope coiled ~2.5 turns around the pad eye's outer bar — a wound
+    """Rope coiled ~2 turns around the pad eye's outer bar — a wound
     lark's-head knot where the rope ties off. Static per duck (eyes ride
     on the trunk)."""
-    turns, pitch = 2.5, 0.0035
+    turns, pitch = 2.0, 0.003
     t = np.linspace(0.0, 2.0 * np.pi * turns, 64)
     pts = np.stack([KNOT_MAJOR * np.cos(t), KNOT_MAJOR * np.sin(t),
                     (t / (2 * np.pi * turns) - 0.5) * turns * pitch], axis=1)
