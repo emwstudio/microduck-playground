@@ -35,11 +35,15 @@ socket-head cap screw** (modelled with 2.5 mm hex socket and M3×0.5
 thread) and hex nut; tightening the screw closes the split and clamps the
 band onto the shell by friction (hose-clamp principle). The tow eyes are
 closed rings **fused to the band by cast neck bosses** — the collar STL is
-verified as ONE connected shell (`connected_bodies == 1` at generation):
-front eye (chest pull) at x = +39 mm, back eye (butt pull) at x = -53 mm,
-both at z = -10 mm. The whole tug force path flows through the collar; no
-panel, standoffs or webbing are needed. The pack + strap STLs are kept in
-meshes/ as an archived alternative.
+verified as ONE connected shell (`connected_bodies == 1` at generation).
+Each eye is an eyebolt-style ring with its hole axis ALONG the pull
+direction and a **clear Ø9 mm hole** (a Ø4 mm rope passes doubled for a
+lark's head; Ø6 mm single for a bowline) — the generator pushes a Ø8 mm
+gauge pin through each eye and asserts the channel is unobstructed:
+front eye (chest pull) at x = +46.6 mm, back eye (butt pull) at
+x = -60.6 mm, both at z = -10 mm. The whole tug force path flows through
+the collar; no panel, standoffs or webbing are needed. The pack + strap
+STLs are kept in meshes/ as an archived alternative.
 
 Collar contact/clearance validation against the leg swing envelope is
 pending; the band sits at mid-torso, above the hip joint line.

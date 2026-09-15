@@ -42,9 +42,16 @@ NUT_AF, NUT_H = 0.0055, 0.0024     # M3 hex nut, 5.5 mm across flats
 THREAD_PITCH, THREAD_R = 0.0005, 0.00035
 
 # --- tow eyes ---
-EYE_MAJOR, EYE_TUBE = 0.005, 0.0023
-EYE_FRONT = np.array([XF + BAND_T / 2 + 0.004, 0.0, Z_C])
-EYE_BACK = np.array([-(XB + BAND_T / 2 + 0.004), 0.0, Z_C])
+# Eyebolt principle: hole axis ALONG the pull direction (x). Inner hole
+# Ø9 mm so a Ø4 mm rope passes doubled (lark's head) or a Ø6 mm rope single
+# (bowline). The tube stands fully clear of the band face so the hole
+# channel is through; a cast neck cradles the ring from BELOW the channel.
+EYE_MAJOR, EYE_TUBE = 0.007, 0.0025
+EYE_INNER_R = EYE_MAJOR - EYE_TUBE           # Ø9 mm clear hole
+FACE_FRONT = XF + BAND_T / 2
+FACE_BACK = XB + BAND_T / 2
+EYE_FRONT = np.array([FACE_FRONT + 0.002 + EYE_MAJOR + EYE_TUBE, 0.0, Z_C])
+EYE_BACK = np.array([-(FACE_BACK + 0.002 + EYE_MAJOR + EYE_TUBE), 0.0, Z_C])
 
 OUT = Path(__file__).resolve().parent.parent / "meshes"
 ASSETS = Path(__file__).resolve().parents[3] / "src/mjlab_microduck/robot/microduck/assets"
@@ -106,22 +113,37 @@ def lugs() -> trimesh.Trimesh:
 def tow_eye(center: np.ndarray) -> trimesh.Trimesh:
     """Closed ring fused to the band by a cast neck boss (ONE solid).
 
-    The ring plane is vertical (rope pulls along x); the neck is a tapered
-    boss running from inside the band to the ring's bottom tube, so the
-    printed part is a single connected shell.
+    The ring plane is vertical (rope pulls along x through the hole); the
+    neck slopes from inside the band DOWN to the ring's bottom tube and
+    stays below the hole channel, so the Ø9 mm through-hole is unobstructed
+    and the printed part is a single connected shell.
     """
     ring = trimesh.creation.torus(major_radius=EYE_MAJOR, minor_radius=EYE_TUBE,
-                                  major_sections=40, minor_sections=12)
+                                  major_sections=48, minor_sections=14)
     ring.apply_transform(trimesh.geometry.align_vectors([0, 0, 1], [1, 0, 0]))
     ring.apply_translation(center)
     sign = 1.0 if center[0] > 0 else -1.0
-    band_face = sign * (abs(center[0]) - 0.004)          # band outer surface x
-    neck_x0 = band_face - sign * BAND_T                   # inside the band
-    neck_x1 = center[0] - sign * 0.001                    # into the ring's bottom tube
-    neck = trimesh.creation.box(
-        extents=(abs(neck_x1 - neck_x0), 0.006, 0.005))
-    neck.apply_translation(((neck_x0 + neck_x1) / 2, 0.0, Z_C - 0.004))
+    band_face = sign * (abs(center[0]) - 0.002 - EYE_MAJOR - EYE_TUBE)
+    neck_x0 = band_face - sign * BAND_T                    # inside the band
+    neck_x1 = center[0] + sign * 0.002                     # past the ring's bottom tube
+    neck = trimesh.creation.box(extents=(abs(neck_x1 - neck_x0), 0.006, 0.004))
+    # horizontal bar hugging the tube's underside; top face stays 0.5 mm
+    # below the hole channel (bottom edge = Z_C - EYE_INNER_R)
+    neck.apply_translation(((neck_x0 + neck_x1) / 2, 0.0, Z_C - EYE_MAJOR))
     return trimesh.boolean.union([ring, neck], engine="manifold")
+
+
+def hole_gauge_ok(collar: trimesh.Trimesh) -> bool:
+    """Push a Ø8 mm gauge pin along x through each eye centre: the collar
+    must not intersect it (hole channel clear for the rope)."""
+    span = 2 * (EYE_MAJOR + EYE_TUBE) + 0.004   # ring tube extent + margin
+    for center in (EYE_FRONT, EYE_BACK):
+        pin = trimesh.creation.cylinder(radius=EYE_INNER_R - 0.0005, height=span, sections=24)
+        pin.apply_transform(trimesh.geometry.align_vectors([0, 0, 1], [1, 0, 0]))
+        pin.apply_translation(center)
+        if trimesh.boolean.intersection([collar, pin], engine="manifold").volume > 1e-12:
+            return False
+    return True
 
 
 def _thread_helix(z0: float, z1: float) -> trimesh.Trimesh:
@@ -203,6 +225,9 @@ def main() -> None:
     print(f"one-piece collar: {len(collar.vertices)} verts, "
           f"{len(collar.faces)} faces, watertight={collar.is_watertight}, "
           f"connected_bodies={len(bodies)} (must be 1)")
+    assert len(bodies) == 1, "collar is not one connected piece"
+    assert hole_gauge_ok(collar), "tow-eye hole channel is blocked"
+    print("hole gauge (Ø8 mm pin through each eye): CLEAR")
     print("front eye at", EYE_FRONT.tolist(), " back eye at", EYE_BACK.tolist())
 
 

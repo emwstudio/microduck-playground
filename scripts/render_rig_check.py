@@ -9,7 +9,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from mjlab_microduck.robot.tug_of_war import build_tug_spec
 
-OUT = Path(__file__).resolve().parents[3] / "artifacts" / "tug_of_war_v1"
+OUT = Path(__file__).resolve().parents[3] / "artifacts" / "tug_of_war_v1" / "on_duck"
 
 spec = build_tug_spec(n_per_team=1)
 model = spec.compile()
