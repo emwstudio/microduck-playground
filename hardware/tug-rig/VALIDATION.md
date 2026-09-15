@@ -33,9 +33,9 @@ band height z = -4 mm — above the hip-shell bulge so the clamp is visible
 from the side), SPLIT (~12 mm) on the +y side with two slim PARALLEL
 cantilever lugs (3×8 mm, faces exactly perpendicular to the screw axis so
 the head and nut seat flat and clamp squarely, ~9 mm between the lug
-faces) reaching 20 mm radially
+faces) reaching 10 mm radially
 OUTBOARD — the **M3 socket-head cap screw** (Ø3.2 mm holes, 2.5 mm hex
-socket, M3×0.5 thread, black-oxide in sim) bridges the lug tips ~14 mm
+socket, M3×0.5 thread, black-oxide in sim) bridges the lugs ~6 mm
 OUTSIDE the ring's outer surface, so the hex key tightens it with zero
 obstruction from the ring. Tightening pulls the lug arms together and
 clamps the band onto the shell by friction. The tow eyes are D-ring style: ring plane
