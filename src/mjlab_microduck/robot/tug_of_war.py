@@ -114,10 +114,10 @@ SPAN_ALPHA_SEGMENTS = 6
 # around the torso shell, screw-tightened on the side, tow eyes integrated
 # front (chest pull) and back (butt pull). Sites sit at the eye centres.
 TEAM_Y = 0.0
-RING_LOCAL_X = -0.0676
+RING_LOCAL_X = -0.0686
 RING_LOCAL_Z = 0.016
 RING_LOCAL_Y = 0.0
-CHEST_LOCAL = np.array([0.0446, 0.0, 0.016])
+CHEST_LOCAL = np.array([0.0460, 0.0, 0.016])
 SPAWN_Y = TEAM_Y
 
 
@@ -362,7 +362,7 @@ def _local_span_curve(chord: float, sag: float) -> np.ndarray:
 
 SPAN_RADIUS = 0.004   # Ø8 mm rope — threads the Ø9 mm pad-eye holes cleanly
 
-EYE_RING_MAJOR = 0.007   # pad-eye ring radius (mirrors hardware/tug-rig/cad_collar.py EYE_MAJOR)
+EYE_RING_MAJOR = 0.008   # pad-eye ring radius (mirrors hardware/tug-rig/cad_collar.py EYE_MAJOR)
 KNOT_MAJOR = 0.0052      # rope donut cinching the eye's outer bar (lark's head)
 
 
