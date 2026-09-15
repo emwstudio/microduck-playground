@@ -31,11 +31,12 @@ collar** (`tug_collar.stl` + `tug_clamp_screw.stl`): a 14×2.2 mm band
 following the shell contour (front +34 mm, back -48 mm, sides ±49 mm at
 band height z = -4 mm — above the hip-shell bulge so the clamp is visible
 from the side), SPLIT (~18 mm) on the +y side with two slim cantilever
-lugs (5×8 mm, rotated to the local band tangent) reaching radially
+lugs (5×8 mm, rotated to the local band tangent) reaching 20 mm radially
 OUTBOARD — the **M3 socket-head cap screw** (Ø3.2 mm holes, 2.5 mm hex
-socket, M3×0.5 thread, black-oxide in sim) bridges the lug tips ~7 mm
-OUTSIDE the ring's outer surface, hose-clamp style. Tightening pulls the
-lug arms together and clamps the band onto the shell by friction. The tow eyes are D-ring style: ring plane
+socket, M3×0.5 thread, black-oxide in sim) bridges the lug tips ~14 mm
+OUTSIDE the ring's outer surface, so the hex key tightens it with zero
+obstruction from the ring. Tightening pulls the lug arms together and
+clamps the band onto the shell by friction. The tow eyes are D-ring style: ring plane
 VERTICAL and fore-aft (rope threads from the side, pull stays in the
 ring's plane), **fused to the band by cast neck bosses** — the collar STL
 is verified as ONE connected shell (`connected_bodies == 1` at
