@@ -31,7 +31,7 @@ collar** (`tug_collar.stl` + `tug_clamp_screw.stl`): a 14×2.2 mm band
 following the shell contour (front +34 mm, back -48 mm, sides ±49 mm at
 band height z = -4 mm — above the hip-shell bulge so the clamp is visible
 from the side), SPLIT (~18 mm) on the +y side with two slim PARALLEL
-cantilever lugs (5×8 mm, faces exactly perpendicular to the screw axis so
+cantilever lugs (3×8 mm, faces exactly perpendicular to the screw axis so
 the head and nut seat flat and clamp squarely) reaching 20 mm radially
 OUTBOARD — the **M3 socket-head cap screw** (Ø3.2 mm holes, 2.5 mm hex
 socket, M3×0.5 thread, black-oxide in sim) bridges the lug tips ~14 mm
