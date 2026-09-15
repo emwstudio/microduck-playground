@@ -159,83 +159,6 @@ SAG_PER_SLACK = 0.6       # parabola depth per metre of slack
 SAG_MAX = 0.045
 
 
-# Rope texture. Spans use our procedural twist tile (soft 3-band diagonal
-# helix, colours measured off the reference video's strand); coils use
-# ambientCG Rope001 (CC0, https://ambientcg.com/view?id=Rope001).
-_ROPE_COLOR = _ROBOT_DIR / "assets" / "rope_hemp_color.png"
-_ROPE_NORMAL = _ROBOT_DIR / "assets" / "rope_hemp_normal.png"
-_ROPE_ROUGHNESS = _ROBOT_DIR / "assets" / "rope_hemp_roughness.png"
-_TWIST_CROWN = np.array([0.93, 0.85, 0.66])
-_TWIST_GROOVE = np.array([0.72, 0.62, 0.44])
-
-
-def _twist_texture(size: int = 256, bands: int = 3) -> tuple[bytes, bytes]:
-    """Seamless diagonal-band twist tile + matching normal map.
-
-    On a cylinder's unwrapped UV a helix is a diagonal line; the tile repeats
-    `bands` soft ridges on the 45-degree diagonal so the rope reads as long-
-    pitch twisted strands, with clean silky shading (no fibre speckle —
-    minification noise was what made previous versions look ragged)."""
-    yy, xx = np.mgrid[0:size, 0:size].astype(np.float64)
-    phase = ((xx + yy) / size * bands) % 1.0
-    ridge = 0.5 + 0.5 * np.cos(2.0 * np.pi * phase)          # 1 crown, 0 groove
-    shade = 0.87 + 0.13 * ridge                              # gentle contrast
-    fibre = 0.015 * np.sin(xx * 0.9) + 0.01 * np.sin(yy * 2.3 + xx * 0.2)
-    shade = np.clip(shade + fibre, 0, 1)
-    rgb = shade[..., None] * (_TWIST_GROOVE + (_TWIST_CROWN - _TWIST_GROOVE) * ridge[..., None])
-    rgb = np.clip(rgb * 255, 0, 255).astype(np.uint8)
-
-    eps = 1.0 / size
-    dhdx = (np.roll(ridge, -1, 1) - np.roll(ridge, 1, 1)) / (2 * eps)
-    dhdy = (np.roll(ridge, -1, 0) - np.roll(ridge, 1, 0)) / (2 * eps)
-    strength = 0.002
-    nx, ny = -dhdx * strength, -dhdy * strength
-    nz = np.ones_like(nx)
-    norm = np.sqrt(nx**2 + ny**2 + nz**2)
-    nrm = np.stack([(nx / norm + 1) / 2, (ny / norm + 1) / 2, (nz / norm + 1) / 2], axis=-1)
-    return rgb.tobytes(), (nrm * 255).astype(np.uint8).tobytes()
-
-
-def _add_twist_material(spec: mujoco.MjSpec) -> None:
-    rgb, normal = _twist_texture()
-    tex = spec.add_texture(name="tug_twist_tex")
-    tex.type = mujoco.mjtTexture.mjTEXTURE_2D
-    tex.width, tex.height, tex.nchannel = 256, 256, 3
-    tex.data = rgb
-    ntex = spec.add_texture(name="tug_twist_nrm")
-    ntex.type = mujoco.mjtTexture.mjTEXTURE_2D
-    ntex.width, ntex.height, ntex.nchannel = 256, 256, 3
-    ntex.data = normal
-    mat = spec.add_material(name="tug_twist")
-    mat.rgba = (1.0, 1.0, 1.0, 1.0)   # MuJoCo's default 0.5 grey halves the texture
-    mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = "tug_twist_tex"
-    mat.textures[mujoco.mjtTextureRole.mjTEXROLE_NORMAL] = "tug_twist_nrm"
-    mat.texrepeat = (1.0, 1.0)
-    mat.texuniform = False
-    mat.specular = 0.6
-    mat.shininess = 0.6
-
-
-
-
-def _add_hemp_material(spec: mujoco.MjSpec) -> None:
-    for name, path, role in (("tug_hemp_tex", _ROPE_COLOR, mujoco.mjtTextureRole.mjTEXROLE_RGB),
-                             ("tug_hemp_nrm", _ROPE_NORMAL, mujoco.mjtTextureRole.mjTEXROLE_NORMAL),
-                             ("tug_hemp_rgh", _ROPE_ROUGHNESS, mujoco.mjtTextureRole.mjTEXROLE_ROUGHNESS)):
-        tex = spec.add_texture(name=name)
-        tex.type = mujoco.mjtTexture.mjTEXTURE_2D
-        tex.file = str(path)
-    mat = spec.add_material(name="tug_hemp")
-    mat.rgba = (1.0, 1.0, 1.0, 1.0)   # MuJoCo's default 0.5 grey halves the texture
-    mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = "tug_hemp_tex"
-    mat.textures[mujoco.mjtTextureRole.mjTEXROLE_NORMAL] = "tug_hemp_nrm"
-    mat.textures[mujoco.mjtTextureRole.mjTEXROLE_ROUGHNESS] = "tug_hemp_rgh"
-    mat.texrepeat = (8.0, 1.0)
-    mat.texuniform = True
-    mat.specular = 0.35
-    mat.shininess = 0.4
-
-
 def _add_rig_materials(spec: mujoco.MjSpec) -> None:
     webbing = spec.add_material(name="tug_webbing")
     webbing.rgba = (0.16, 0.16, 0.18, 1.0)   # dark nylon harness
@@ -253,6 +176,10 @@ def _add_rig_materials(spec: mujoco.MjSpec) -> None:
     orange.rgba = (0.92, 0.42, 0.08, 1.0)   # anodized-orange carabiner
     orange.specular = 0.85
     orange.shininess = 0.6
+    chain = spec.add_material(name="tug_chain")
+    chain.rgba = (0.62, 0.64, 0.68, 1.0)   # galvanised steel links
+    chain.specular = 0.95
+    chain.shininess = 0.85
 
 
 def _load_hook_stls(spec: mujoco.MjSpec) -> None:
@@ -360,47 +287,83 @@ def _local_span_curve(chord: float, sag: float) -> np.ndarray:
     return points
 
 
-SPAN_RADIUS = 0.004   # Ø8 mm rope — threads the Ø9 mm pad-eye holes cleanly
+SPAN_RADIUS = 0.004   # rope tube radius for swept curves (span base curve etc.)
 
-EYE_RING_MAJOR = 0.007   # pad-eye ring radius (mirrors hardware/tug-rig/cad_collar.py EYE_MAJOR)
-KNOT_MAJOR = 0.0052      # rope donut cinching the eye's outer bar (lark's head)
+LINK_LEN, LINK_W, LINK_TUBE = 0.009, 0.0055, 0.0016   # oval chain link
+LINK_PITCH = 0.0065                                   # centre spacing along the chain
 
 
-def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
-    """Rope coiled ~2.5 turns around the pad eye's outer bar — a wound
-    lark's-head knot where the rope ties off. Static per duck (eyes ride
-    on the trunk)."""
-    turns, pitch = 2.5, 0.0035
-    t = np.linspace(0.0, 2.0 * np.pi * turns, 64)
-    pts = np.stack([KNOT_MAJOR * np.cos(t), KNOT_MAJOR * np.sin(t),
-                    (t / (2 * np.pi * turns) - 0.5) * turns * pitch], axis=1)
-    verts, normals, uvs, faces = _sweep_smooth(pts)
-    uvs[:, 0] *= (turns * 2.0 * np.pi * KNOT_MAJOR) / (3.5 * 2.0 * SPAN_RADIUS)
+def _link_mesh() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """One oval chain link: tube swept along a stadium loop in the local
+    xy-plane (long axis = x). Returns (verts, normals, faces)."""
+    rc = LINK_W / 2 - LINK_TUBE / 2
+    straight = (LINK_LEN - 2 * rc) / 2
+    right_cap = [(straight + rc * np.cos(a), rc * np.sin(a))
+                 for a in np.linspace(-np.pi / 2, np.pi / 2, 12, endpoint=False)]
+    left_cap = [(-straight + rc * np.cos(a), rc * np.sin(a))
+                for a in np.linspace(np.pi / 2, 3 * np.pi / 2, 12, endpoint=False)]
+    pts = np.array([[x, y, 0.0] for x, y in right_cap + left_cap + [right_cap[0]]])
+    tang = np.gradient(pts, axis=0)
+    tl = np.linalg.norm(tang, axis=1, keepdims=True)
+    tl[tl < 1e-12] = 1.0
+    tang = tang / tl
+    up = np.tile(np.array([0.0, 0.0, 1.0]), (len(pts), 1))
+    w = np.cross(tang, up)
+    wl = np.linalg.norm(w, axis=1, keepdims=True)
+    wl[wl < 1e-12] = 1.0
+    w = w / wl
+    n_ring = 8
+    alphas = 2 * np.pi * np.arange(n_ring) / n_ring
+    verts, normals, faces = [], [], []
+    for i, p in enumerate(pts):
+        ring_v = p + LINK_TUBE * (np.cos(alphas)[:, None] * up[i] + np.sin(alphas)[:, None] * w[i])
+        ring_n = np.cos(alphas)[:, None] * up[i] + np.sin(alphas)[:, None] * w[i]
+        verts.append(ring_v)
+        normals.append(ring_n)
+    for i in range(len(pts) - 1):
+        for j in range(n_ring):
+            j2 = (j + 1) % n_ring
+            a, b = i * n_ring + j, (i + 1) * n_ring + j
+            c, d = (i + 1) * n_ring + j2, i * n_ring + j2
+            faces.append((a, b, c))
+            faces.append((a, c, d))
+    return np.concatenate(verts), np.concatenate(normals), np.array(faces, dtype=np.int32)
+
+
+def _chain_span_mesh(spec: mujoco.MjSpec, name: str, chord: float, sag: float) -> None:
+    """A chain for one span variant: oval links laid along the sagging
+    curve, each link's plane rotated 90° about the chain axis from its
+    neighbour — real chains alternate. End links land IN the pad eyes."""
+    curve = _local_span_curve(chord, sag)
+    seglen = np.linalg.norm(np.diff(curve, axis=0), axis=1)
+    arc = np.r_[0.0, np.cumsum(seglen)]
+    at = np.arange(0.0, arc[-1], LINK_PITCH)
+    centres = np.stack([np.interp(at, arc, curve[:, k]) for k in range(3)], axis=1)
+    tang = np.gradient(centres, axis=0)
+    tang /= np.linalg.norm(tang, axis=1, keepdims=True)
+    lv, ln, lf = _link_mesh()
+    verts, normals, faces = [], [], []
+    for i, (p, t) in enumerate(zip(centres, tang)):
+        ref = np.array([0.0, 0.0, 1.0])
+        if abs(t[2]) > 0.9:
+            ref = np.array([1.0, 0.0, 0.0])
+        u = ref - np.dot(ref, t) * t
+        u /= np.linalg.norm(u)
+        w = np.cross(t, u)
+        phi = i * np.pi / 2
+        u_rot = np.cos(phi) * u + np.sin(phi) * w
+        n_rot = -np.sin(phi) * u + np.cos(phi) * w
+        R = np.stack([t, u_rot, n_rot], axis=1)
+        base = i * len(lv)
+        verts.append(lv @ R.T + p)
+        normals.append(ln @ R.T)
+        faces.append(lf + base)
     mesh = spec.add_mesh(name=name)
-    mesh.uservert = verts.flatten().astype(np.float32)
-    mesh.usernormal = normals.flatten().astype(np.float32)
-    mesh.userface = faces.flatten()
-    mesh.usertexcoord = uvs.flatten().astype(np.float32)
+    mesh.uservert = np.concatenate(verts).flatten().astype(np.float32)
+    mesh.usernormal = np.concatenate(normals).flatten().astype(np.float32)
+    mesh.userface = np.concatenate(faces).flatten()
 
 
-def _add_knots(spec: mujoco.MjSpec, knot_use: dict[str, set[str]], red: list[str]) -> None:
-    """A cinched rope donut on every pad eye that actually carries a rope."""
-    for prefix, sites in knot_use.items():
-        trunk = _find_body(spec, f"{prefix}trunk_base")
-        team = "red" if prefix in red else "blue"
-        for site in sites:
-            eye = ring_local(team) if site == "rope_hook" else chest_local(team)
-            sign = 1.0 if eye[0] > 0 else -1.0
-            trunk.add_geom(
-                name=f"{prefix}tug_knot_{site}",
-                type=mujoco.mjtGeom.mjGEOM_MESH,
-                meshname="tug_knot",
-                pos=(eye[0] + sign * EYE_RING_MAJOR, 0.0, eye[2]),
-                material="tug_twist",
-                contype=0,
-                conaffinity=0,
-                density=0.0,
-            )
 SPAN_SMOOTH_ALPHA = 16
 
 
@@ -536,19 +499,10 @@ def _add_tug_lighting(spec: mujoco.MjSpec) -> None:
 
 
 def _build_span_variants(spec: mujoco.MjSpec) -> None:
-    _add_twist_material(spec)
     for ci, chord in enumerate(CHORD_BINS):
         for si, sag_frac in enumerate(SAG_BINS):
             sag = sag_frac * SAG_MAX
-            points = _local_span_curve(float(chord), sag)
-            verts, normals, uvs, faces = _sweep_smooth(points)
-            # Twist pitch ≈ 3.5 rope diameters, measured off the reference.
-            uvs[:, 0] *= float(chord) / (3.5 * 2.0 * SPAN_RADIUS)
-            mesh = spec.add_mesh(name=f"tug_var_{ci}_{si}")
-            mesh.uservert = verts.flatten().astype(np.float32)
-            mesh.usernormal = normals.flatten().astype(np.float32)
-            mesh.userface = faces.flatten()
-            mesh.usertexcoord = uvs.flatten().astype(np.float32)
+            _chain_span_mesh(spec, f"tug_var_{ci}_{si}", float(chord), sag)
 
 
 def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
@@ -623,13 +577,10 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
     # Rope chain, far red → center → far blue. Two cords per link (left/right
     # waist sites) so a link transmits no yaw torque between teammates.
     chain = list(reversed(red)) + blue
-    knot_use: dict[str, set[str]] = {}
     for pa, pb in zip(chain[:-1], chain[1:]):
         nominal = gap if pa == red[0] else spacing
         link_len = nominal + ROPE_SLACK
         site_a, site_b = _span_hook_sites(pa, pb, red)
-        knot_use.setdefault(pa, set()).add(site_a)
-        knot_use.setdefault(pb, set()).add(site_b)
         cord = parent.add_tendon(
             name=f"tug_{pa or 'r0_'}{pb}cord",
             stiffness=ROPE_STIFFNESS,
@@ -645,14 +596,11 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
         cord.wrap_site(f"{pa}{site_a}")
         cord.wrap_site(f"{pb}{site_b}")
 
-    _add_hemp_material(parent)
     _matte_floor(parent)
     _add_tug_lighting(parent)
     _add_rig_materials(parent)
     _load_hook_stls(parent)
     _add_harness_rings(parent, n_per_team)
-    _knot_mesh(parent)
-    _add_knots(parent, knot_use, red)
     _build_span_variants(parent)
     n_strands = 2 * n_per_team - 1
     for idx in range(n_strands):
@@ -661,7 +609,7 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
             name=f"tug_span_{idx}",
             type=mujoco.mjtGeom.mjGEOM_MESH,
             meshname="tug_var_5_1",
-            material="tug_twist",
+            material="tug_chain",
             contype=0,
             conaffinity=0,
         )
