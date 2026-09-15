@@ -361,6 +361,45 @@ def _local_span_curve(chord: float, sag: float) -> np.ndarray:
 
 
 SPAN_RADIUS = 0.004   # Ø8 mm rope — threads the Ø9 mm pad-eye holes cleanly
+
+EYE_RING_MAJOR = 0.007   # pad-eye ring radius (mirrors hardware/tug-rig/cad_collar.py EYE_MAJOR)
+KNOT_MAJOR = 0.0052      # rope donut cinching the eye's outer bar (lark's head)
+
+
+def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
+    """Rope donut wrapping the pad eye's outer bar — the cinched loop of a
+    lark's head where the rope ties off. Static per duck (eyes ride on the
+    trunk)."""
+    t = np.linspace(0.0, 2.0 * np.pi, 25)
+    pts = np.stack([KNOT_MAJOR * np.cos(t), KNOT_MAJOR * np.sin(t),
+                    np.zeros_like(t)], axis=1)
+    verts, normals, uvs, faces = _sweep_smooth(pts)
+    uvs[:, 0] *= (2.0 * np.pi * KNOT_MAJOR) / (3.5 * 2.0 * SPAN_RADIUS)
+    mesh = spec.add_mesh(name=name)
+    mesh.uservert = verts.flatten().astype(np.float32)
+    mesh.usernormal = normals.flatten().astype(np.float32)
+    mesh.userface = faces.flatten()
+    mesh.usertexcoord = uvs.flatten().astype(np.float32)
+
+
+def _add_knots(spec: mujoco.MjSpec, knot_use: dict[str, set[str]], red: list[str]) -> None:
+    """A cinched rope donut on every pad eye that actually carries a rope."""
+    for prefix, sites in knot_use.items():
+        trunk = _find_body(spec, f"{prefix}trunk_base")
+        team = "red" if prefix in red else "blue"
+        for site in sites:
+            eye = ring_local(team) if site == "rope_hook" else chest_local(team)
+            sign = 1.0 if eye[0] > 0 else -1.0
+            trunk.add_geom(
+                name=f"{prefix}tug_knot_{site}",
+                type=mujoco.mjtGeom.mjGEOM_MESH,
+                meshname="tug_knot",
+                pos=(eye[0] + sign * EYE_RING_MAJOR, 0.0, eye[2]),
+                material="tug_twist",
+                contype=0,
+                conaffinity=0,
+                density=0.0,
+            )
 SPAN_SMOOTH_ALPHA = 16
 
 
@@ -583,10 +622,13 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
     # Rope chain, far red → center → far blue. Two cords per link (left/right
     # waist sites) so a link transmits no yaw torque between teammates.
     chain = list(reversed(red)) + blue
+    knot_use: dict[str, set[str]] = {}
     for pa, pb in zip(chain[:-1], chain[1:]):
         nominal = gap if pa == red[0] else spacing
         link_len = nominal + ROPE_SLACK
         site_a, site_b = _span_hook_sites(pa, pb, red)
+        knot_use.setdefault(pa, set()).add(site_a)
+        knot_use.setdefault(pb, set()).add(site_b)
         cord = parent.add_tendon(
             name=f"tug_{pa or 'r0_'}{pb}cord",
             stiffness=ROPE_STIFFNESS,
@@ -608,6 +650,8 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
     _add_rig_materials(parent)
     _load_hook_stls(parent)
     _add_harness_rings(parent, n_per_team)
+    _knot_mesh(parent)
+    _add_knots(parent, knot_use, red)
     _build_span_variants(parent)
     n_strands = 2 * n_per_team - 1
     for idx in range(n_strands):
