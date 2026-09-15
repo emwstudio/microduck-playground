@@ -32,14 +32,17 @@ following the shell contour (front +34 mm, back -48 mm, sides ±49 mm at
 band height z = -10 mm, i.e. ~1-2 mm clamping allowance), SPLIT on the +y
 side with two lugs — drilled **Ø3.2 mm through-holes** take an **M3
 socket-head cap screw** (modelled with 2.5 mm hex socket and M3×0.5
-thread) and hex nut; tightening the screw closes the split and clamps the
-band onto the shell by friction (hose-clamp principle). The tow eyes are
-closed rings **fused to the band by cast neck bosses** — the collar STL is
-verified as ONE connected shell (`connected_bodies == 1` at generation).
-Each eye is an eyebolt-style ring with its hole axis ALONG the pull
-direction and a **clear Ø9 mm hole** (a Ø4 mm rope passes doubled for a
-lark's head; Ø6 mm single for a bowline) — the generator pushes a Ø8 mm
-gauge pin through each eye and asserts the channel is unobstructed:
+thread) and hex nut. The band's split is ~12 mm and the lugs 6 mm wide,
+leaving **~6 mm between the lug faces** — real screw travel, so tightening
+genuinely closes the gap and clamps the band onto the shell by friction
+(hose-clamp principle). The tow eyes are D-ring style: ring plane
+VERTICAL and fore-aft (rope threads from the side, pull stays in the
+ring's plane), **fused to the band by cast neck bosses** — the collar STL
+is verified as ONE connected shell (`connected_bodies == 1` at
+generation). Each eye has a **clear Ø9 mm hole** (Ø4 mm rope passes
+doubled for a lark's head; Ø6 mm single for a bowline) — the generator
+pushes a Ø8 mm gauge pin sideways through each eye and asserts the
+channel is unobstructed:
 front eye (chest pull) at x = +46.6 mm, back eye (butt pull) at
 x = -60.6 mm, both at z = -10 mm. The whole tug force path flows through
 the collar; no panel, standoffs or webbing are needed. The pack + strap
