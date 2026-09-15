@@ -114,10 +114,10 @@ SPAN_ALPHA_SEGMENTS = 6
 # around the torso shell, screw-tightened on the side, tow eyes integrated
 # front (chest pull) and back (butt pull). Sites sit at the eye centres.
 TEAM_Y = 0.0
-RING_LOCAL_X = -0.053
+RING_LOCAL_X = -0.0606
 RING_LOCAL_Z = -0.010
 RING_LOCAL_Y = 0.0
-CHEST_LOCAL = np.array([0.039, 0.0, -0.010])
+CHEST_LOCAL = np.array([0.0466, 0.0, -0.010])
 SPAWN_Y = TEAM_Y
 
 
