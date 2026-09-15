@@ -1,4 +1,4 @@
-"""Single-duck close-up renders of the tow-pack + waist strap (fix check)."""
+"""Single-duck close-up renders of the tug rig (clamp collar) on the duck."""
 import sys
 from pathlib import Path
 
