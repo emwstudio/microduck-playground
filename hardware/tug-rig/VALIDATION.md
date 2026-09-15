@@ -33,7 +33,7 @@ triangle sections through every trunk_base mesh in robot_allcollisions.xml
 across the band height and reduces each 5° bin to the outermost radius
 (front 22.8 mm, back 46 mm, sides 32 mm) — the 14×2.2 mm band follows that
 contour with a 1.2 mm clamping allowance, wrapping the purple shell at
-**z = +18 mm** (mid-shell; the shell's real triangle surface spans
+**z = +16 mm** (mid-shell; the shell's real triangle surface spans
 z 0.3-42 mm — an earlier z=-4 mm band sat BELOW the shell on the bare
 frame, which is why it looked loose). The band is SPLIT (~12 mm) on the
 +y side with two slim PARALLEL cantilever lugs (3×8 mm, faces exactly
@@ -52,10 +52,25 @@ verified as ONE connected shell (`connected_bodies == 1` at generation). Each ey
 doubled for a lark's head; Ø6 mm single for a bowline) — the generator
 pushes a Ø8 mm gauge pin sideways through each eye and asserts the
 channel is unobstructed:
-front eye (chest pull) at x = +38.2 mm, back eye (butt pull) at
-x = -61.1 mm, both at z = +18 mm. The whole tug force path flows through
+front eye (chest pull) at x = +45.0 mm, back eye (butt pull) at
+x = -67.6 mm, both at z = +16 mm. The whole tug force path flows through
 the collar; no panel, standoffs or webbing are needed. The pack + strap
 STLs are kept in meshes/ as an archived alternative.
+
+## Clearance review (verify_collar_clearance.py, report in meshes/)
+
+- **Static**: no intersection with any robot mesh. Closest points:
+  right/left shell ~0.4-0.5 mm at the band rims (the shell lip flares
+  between contour bins — a graze, not an overlap; the band is a clamp,
+  shell contact is its job), neck servo (neck/xl330) 0.93 mm — the band
+  was lowered from z=+18 to +16 mm to clear it (it lives on the neck
+  body, which the contour measurement does not cover).
+- **Leg swing** (hip_pitch/hip_roll/knee swept full range, FK + KDTree):
+  worst 0.08 mm, only at extreme folds (|hip_pitch| ≥ ~1.0 rad) — far
+  outside the tug envelope (±0.35 rad); walking poses keep >2 mm.
+- Screw assembly: ≥7.9 mm from everything.
+- Band-to-shell: analytic ≥1.2 mm at every contour bin (rolling-MAX
+  filtered measured contour + allowance; the filter never shrinks).
 
 Collar contact/clearance validation against the leg swing envelope is
 pending; the band sits at mid-torso, above the hip joint line.
