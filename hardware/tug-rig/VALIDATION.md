@@ -32,10 +32,10 @@ following the shell contour (front +34 mm, back -48 mm, sides ±49 mm at
 band height z = -10 mm, i.e. ~1-2 mm clamping allowance), SPLIT on the +y
 side with two lugs — drilled **Ø3.2 mm through-holes** take an **M3
 socket-head cap screw** (modelled with 2.5 mm hex socket and M3×0.5
-thread) and hex nut. The band's split is ~12 mm and the lugs 6 mm wide,
-leaving **~6 mm between the lug faces** — real screw travel, so tightening
-genuinely closes the gap and clamps the band onto the shell by friction
-(hose-clamp principle). The tow eyes are D-ring style: ring plane
+thread) and hex nut. The band's split is ~28 mm and the lugs 6 mm wide,
+leaving **~22 mm between the lug faces** — generous screw travel, so
+tightening genuinely closes the gap and clamps the band onto the shell by
+friction (hose-clamp principle). The tow eyes are D-ring style: ring plane
 VERTICAL and fore-aft (rope threads from the side, pull stays in the
 ring's plane), **fused to the band by cast neck bosses** — the collar STL
 is verified as ONE connected shell (`connected_bodies == 1` at
