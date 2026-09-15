@@ -365,20 +365,30 @@ def _local_span_curve(chord: float, sag: float) -> np.ndarray:
 SPAN_RADIUS = 0.004   # Ø8 mm rope — threads the Ø9 mm pad-eye holes cleanly
 
 EYE_RING_MAJOR = 0.008   # pad-eye ring radius (mirrors hardware/tug-rig/cad_collar.py EYE_MAJOR)
-KNOT_MAJOR = 0.0045      # rope coil cinching the eye's outer bar (lark's head)
+EYE_INNER_R = 0.0055     # pad-eye hole radius (EYE_MAJOR - EYE_TUBE)
+KNOT_MAJOR = 0.0045      # rope coil cinching the eye's rim on the pull side (lark's head)
 
 
 def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
-    """Rope coiled ~2 turns around the pad eye's bottom tube (tangent along
-    y, so the coil's axis is y) — a wound lark's-head knot where the rope
-    ties off. Static per duck (eyes ride on the trunk)."""
+    """Rope coiled ~2 turns around the pad eye's rim on the pull side, plus
+    a short working-end stub poking through the hole (along y) — how a real
+    rope ties onto a D-ring: the standing part cinches on the rim, the
+    working end threads the hole. Static per duck."""
     turns, pitch = 2.0, 0.003
     t = np.linspace(0.0, 2.0 * np.pi * turns, 64)
-    pts = np.stack([KNOT_MAJOR * np.cos(t),
-                    (t / (2 * np.pi * turns) - 0.5) * turns * pitch,
-                    KNOT_MAJOR * np.sin(t)], axis=1)
-    verts, normals, uvs, faces = _sweep_smooth(pts)
+    coil_pts = np.stack([KNOT_MAJOR * np.cos(t),
+                         (t / (2 * np.pi * turns) - 0.5) * turns * pitch,
+                         KNOT_MAJOR * np.sin(t)], axis=1)
+    verts, normals, uvs, faces = _sweep_smooth(coil_pts)
     uvs[:, 0] *= (turns * 2.0 * np.pi * KNOT_MAJOR) / (3.5 * 2.0 * SPAN_RADIUS)
+    stub_pts = np.stack([np.zeros(9), np.linspace(-0.007, 0.007, 9), np.zeros(9)], axis=1)
+    sv, sn, su, sf = _sweep_smooth(stub_pts)
+    su[:, 0] *= 0.014 / (3.5 * 2.0 * SPAN_RADIUS)
+    stub_off = np.array([EYE_RING_MAJOR - EYE_INNER_R + 0.0025, 0.0, 0.0])
+    verts = np.concatenate([verts, sv + stub_off])
+    normals = np.concatenate([normals, sn])
+    uvs = np.concatenate([uvs, su])
+    faces = np.concatenate([faces, sf + len(verts) - len(sv)])
     mesh = spec.add_mesh(name=name)
     mesh.uservert = verts.flatten().astype(np.float32)
     mesh.usernormal = normals.flatten().astype(np.float32)
@@ -386,23 +396,23 @@ def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
     mesh.usertexcoord = uvs.flatten().astype(np.float32)
 
 
-def _add_knots(spec: mujoco.MjSpec, knot_use: dict[str, set[str]], red: list[str]) -> None:
-    """A cinched rope donut on every pad eye that actually carries a rope."""
-    for prefix, sites in knot_use.items():
+def _add_knots(spec: mujoco.MjSpec, knot_use: list[tuple[str, str, float]], red: list[str]) -> None:
+    """A wound knot on every pad eye that carries a rope — coil on the rim
+    FACING the incoming rope (sign = direction of the other duck)."""
+    for prefix, site, sign in knot_use:
         trunk = _find_body(spec, f"{prefix}trunk_base")
         team = "red" if prefix in red else "blue"
-        for site in sites:
-            eye = ring_local(team) if site == "rope_hook" else chest_local(team)
-            trunk.add_geom(
-                name=f"{prefix}tug_knot_{site}",
-                type=mujoco.mjtGeom.mjGEOM_MESH,
-                meshname="tug_knot",
-                pos=(eye[0], 0.0, eye[2] - EYE_RING_MAJOR),
-                material="tug_twist",
-                contype=0,
-                conaffinity=0,
-                density=0.0,
-            )
+        eye = ring_local(team) if site == "rope_hook" else chest_local(team)
+        trunk.add_geom(
+            name=f"{prefix}tug_knot_{site}",
+            type=mujoco.mjtGeom.mjGEOM_MESH,
+            meshname="tug_knot",
+            pos=(eye[0] + sign * EYE_RING_MAJOR, 0.0, eye[2]),
+            material="tug_twist",
+            contype=0,
+            conaffinity=0,
+            density=0.0,
+        )
 SPAN_SMOOTH_ALPHA = 16
 
 
@@ -568,16 +578,25 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         chord = float(np.linalg.norm(chord_vec))
         if chord < 1e-6:
             continue
+        # The rope ties off on each eye's NEAR rim (inside the knot coil),
+        # never touching the plate — pull each end back from the site
+        # toward the middle by EYE_MAJOR - SPAN_RADIUS.
+        back = EYE_RING_MAJOR - SPAN_RADIUS
+        chord_vec /= chord
+        e0 = p0 + chord_vec * back
+        e1 = p1 - chord_vec * back
+        span_vec = e1 - e0
+        span_len = float(np.linalg.norm(span_vec))
         slack = max(0.0, span.nominal - chord)
         sag = min(SAG_MAX, SAG_PER_SLACK * slack + 0.002)
-        ci = int(np.argmin(np.abs(CHORD_BINS - chord)))
+        ci = int(np.argmin(np.abs(CHORD_BINS - span_len)))
         si = int(np.argmin(np.abs(np.array(SAG_BINS) * SAG_MAX - sag)))
         model.geom_dataid[span.geom_id] = span.variant_mesh_ids[ci, si]
         # Mocap frame: x along the chord; local +z as close to world-UP as
         # the chord allows, so the baked sag (local -z) points DOWN.
         # (The previous mapping put z_axis = down, which flipped the baked
         # sag skyward — invisible in taut match footage, obvious at slack.)
-        x_axis = chord_vec / chord
+        x_axis = span_vec / span_len
         up = np.array([0.0, 0.0, 1.0])
         z_axis = up - np.dot(up, x_axis) * x_axis
         zn = np.linalg.norm(z_axis)
@@ -588,7 +607,7 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         rot[2::3] = z_axis
         mujoco.mju_mat2Quat(quat, rot)
         mocap_id = model.body_mocapid[span.body_id]
-        data.mocap_pos[mocap_id] = (p0 + p1) / 2.0
+        data.mocap_pos[mocap_id] = (e0 + e1) / 2.0
         data.mocap_quat[mocap_id] = quat
 
 
@@ -625,13 +644,14 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
     # Rope chain, far red → center → far blue. Two cords per link (left/right
     # waist sites) so a link transmits no yaw torque between teammates.
     chain = list(reversed(red)) + blue
-    knot_use: dict[str, set[str]] = {}
+    knot_use: list[tuple[str, str, float]] = []
     for pa, pb in zip(chain[:-1], chain[1:]):
         nominal = gap if pa == red[0] else spacing
         link_len = nominal + ROPE_SLACK
         site_a, site_b = _span_hook_sites(pa, pb, red)
-        knot_use.setdefault(pa, set()).add(site_a)
-        knot_use.setdefault(pb, set()).add(site_b)
+        # pa is at smaller x (chain runs -x → +x): pa's knot faces +x, pb's faces -x
+        knot_use.append((pa, site_a, +1.0))
+        knot_use.append((pb, site_b, -1.0))
         cord = parent.add_tendon(
             name=f"tug_{pa or 'r0_'}{pb}cord",
             stiffness=ROPE_STIFFNESS,
