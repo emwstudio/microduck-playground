@@ -131,17 +131,18 @@ def chest_local(team: str) -> np.ndarray:
 
 def _add_rope_sites(spec: mujoco.MjSpec, team: str) -> None:
     trunk = _find_body(spec, "trunk_base")
+    # alpha=0: sites are physics anchors, not decoration — no marker balls
     trunk.add_site(
         name="rope_hook",
         pos=tuple(ring_local(team)),
         size=(0.004,),
-        rgba=ROPE_RGBA,
+        rgba=(0.0, 0.0, 0.0, 0.0),
     )
     trunk.add_site(
         name="rope_hook_chest",
         pos=tuple(chest_local(team)),
         size=(0.004,),
-        rgba=ROPE_RGBA,
+        rgba=(0.0, 0.0, 0.0, 0.0),
     )
 
 
