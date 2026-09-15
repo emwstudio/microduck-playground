@@ -30,7 +30,7 @@ import trimesh
 XF, XB, HW = 0.034, 0.048, 0.049   # band centreline: front / back / side reach
 Z_C = -0.010                        # band centre height (mid torso)
 BAND_H, BAND_T = 0.014, 0.0022     # band cross-section: vertical × radial
-GAP_HALF = 0.15                     # split half-angle at the +y side (~12 mm gap)
+GAP_HALF = 0.34                     # split half-angle at the +y side (~28 mm gap)
 
 # --- clamp hardware ---
 LUG_W, LUG_OUT, LUG_H = 0.006, 0.007, 0.012   # ~6 mm between the lug faces: screw travel to clamp
