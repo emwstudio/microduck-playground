@@ -5,16 +5,18 @@ The user's design: ONE collar band wrapped around the torso shell, split
 on one side (+y) with a screw through two lugs that tightens the band's
 grip on the shell — a hose-clamp / shaft-collar principle. A closed tow
 eye is integrated at the FRONT (chest pull point) and one at the BACK
-(butt pull point); the whole tug force path flows through the collar, so
-no back panel, standoffs or webbing strap are needed.
+(butt pull point); each eye is fused to the band by a cast neck boss, so
+the whole collar prints as ONE connected piece. The lugs are drilled
+(Ø3.2 mm) for the M3 socket-head screw (modelled with hex socket and
+thread) and its hex nut.
 
 The band follows the measured shell contour (rounded box: front +30 mm,
-back -47 mm, hips ±47 mm) with ~1.5 mm clamping allowance at band height
+back -47 mm, hips ±47 mm) with ~1-2 mm clamping allowance at band height
 (z = -10 mm, clears the hip joints and the legs' swing).
 
-Outputs: meshes/tug_collar_mm.stl (one piece: band + lugs + 2 eyes),
-meshes/tug_clamp_screw_mm.stl (M3 screw + nut), plus metre copies in the
-sim assets dir.
+Outputs: meshes/tug_collar_mm.stl (one connected piece),
+meshes/tug_clamp_screw_mm.stl (screw + nut assembly), plus metre copies
+in the sim assets dir.
 """
 
 from __future__ import annotations
@@ -32,9 +34,12 @@ GAP_HALF = 0.11                     # split half-angle at the +y side (~9 mm gap
 
 # --- clamp hardware ---
 LUG_W, LUG_OUT, LUG_H = 0.008, 0.007, 0.012
-SCREW_R, SCREW_LEN = 0.0015, 0.020
-HEAD_R, HEAD_H = 0.0028, 0.003
-NUT_R, NUT_H = 0.0028, 0.0024
+HOLE_R = 0.0016                     # Ø3.2 mm clearance hole through the lugs
+SCREW_R, SCREW_LEN = 0.0015, 0.024
+HEAD_R, HEAD_H = 0.00275, 0.003    # M3 socket head: Ø5.5 × 3 mm
+SOCKET_AF, SOCKET_D = 0.0025, 0.0015   # 2.5 mm hex key, 1.5 mm deep
+NUT_AF, NUT_H = 0.0055, 0.0024     # M3 hex nut, 5.5 mm across flats
+THREAD_PITCH, THREAD_R = 0.0005, 0.00035
 
 # --- tow eyes ---
 EYE_MAJOR, EYE_TUBE = 0.005, 0.0023
@@ -83,37 +88,97 @@ def band_mesh() -> trimesh.Trimesh:
 
 
 def lugs() -> trimesh.Trimesh:
-    """Two ears at the split ends, protruding +y, screw hole along x."""
+    """Two ears at the split ends, protruding +y, drilled Ø3.2 along x."""
     pts, _ = band_path(2)
     blocks = []
     for end in pts:
         lug = trimesh.creation.box(extents=(LUG_W, LUG_OUT + BAND_T, LUG_H))
         lug.apply_translation((end[0], end[1] + LUG_OUT / 2, Z_C))
         blocks.append(lug)
-    return trimesh.boolean.union(blocks, engine="manifold")
+    pair = trimesh.boolean.union(blocks, engine="manifold")
+    y_mid = pts[0, 1] + LUG_OUT / 2
+    hole = trimesh.creation.cylinder(radius=HOLE_R, height=LUG_W * 3, sections=24)
+    hole.apply_transform(trimesh.geometry.align_vectors([0, 0, 1], [1, 0, 0]))
+    hole.apply_translation((0.0, y_mid, Z_C))
+    return trimesh.boolean.difference([pair, hole], engine="manifold")
 
 
 def tow_eye(center: np.ndarray) -> trimesh.Trimesh:
+    """Closed ring fused to the band by a cast neck boss (ONE solid).
+
+    The ring plane is vertical (rope pulls along x); the neck is a tapered
+    boss running from inside the band to the ring's bottom tube, so the
+    printed part is a single connected shell.
+    """
     ring = trimesh.creation.torus(major_radius=EYE_MAJOR, minor_radius=EYE_TUBE,
                                   major_sections=40, minor_sections=12)
     ring.apply_transform(trimesh.geometry.align_vectors([0, 0, 1], [1, 0, 0]))
     ring.apply_translation(center)
-    return ring
+    sign = 1.0 if center[0] > 0 else -1.0
+    band_face = sign * (abs(center[0]) - 0.004)          # band outer surface x
+    neck_x0 = band_face - sign * BAND_T                   # inside the band
+    neck_x1 = center[0] - sign * 0.001                    # into the ring's bottom tube
+    neck = trimesh.creation.box(
+        extents=(abs(neck_x1 - neck_x0), 0.006, 0.005))
+    neck.apply_translation(((neck_x0 + neck_x1) / 2, 0.0, Z_C - 0.004))
+    return trimesh.boolean.union([ring, neck], engine="manifold")
+
+
+def _thread_helix(z0: float, z1: float) -> trimesh.Trimesh:
+    """M3x0.5 thread ridge: helical sweep around the shaft (axis = z)."""
+    from shapely.geometry import Point
+    turns = (z1 - z0) / THREAD_PITCH
+    n = max(int(turns * 10), 8)
+    t = np.linspace(0, 2 * np.pi * turns, n)
+    path = np.stack([
+        (SCREW_R + THREAD_R / 2) * np.cos(t),
+        (SCREW_R + THREAD_R / 2) * np.sin(t),
+        np.linspace(z0, z1, n),
+    ], axis=1)
+    profile = Point(0, 0).buffer(THREAD_R, resolution=6)
+    return trimesh.creation.sweep_polygon(profile, path)
 
 
 def clamp_screw() -> trimesh.Trimesh:
-    """M3 screw (head + shaft) and hex nut through the lugs, axis along x."""
-    _, n3 = band_path(2)
-    y = (band_path(2)[0][0, 1]) + LUG_OUT / 2
-    shaft = trimesh.creation.cylinder(radius=SCREW_R, height=SCREW_LEN, sections=16)
-    head = trimesh.creation.cylinder(radius=HEAD_R, height=HEAD_H, sections=16)
-    head.apply_translation((0, 0, SCREW_LEN / 2 + HEAD_H / 2))
-    nut = trimesh.creation.cylinder(radius=NUT_R, height=NUT_H, sections=6)
-    nut.apply_translation((0, 0, -(SCREW_LEN / 2 + NUT_H / 2)))
-    screw = trimesh.boolean.union([shaft, head, nut], engine="manifold")
-    screw.apply_transform(trimesh.geometry.align_vectors([0, 0, 1], [1, 0, 0]))
-    screw.apply_translation((0.0, y, Z_C))
-    return screw
+    """M3 socket-head cap screw + hex nut through the lug holes (axis = x).
+
+    Every part is modelled along z, rotated z→x and placed at its final x:
+    head snug on the +x lug face, nut snug on the -x lug face, thread on
+    the shaft between them. Separate shells on purpose — screw and nut are
+    different physical parts (the STL is an assembly).
+    """
+    pts, _ = band_path(2)
+    y_mid = pts[0, 1] + LUG_OUT / 2
+    x2 = pts[1, 0] + LUG_W / 2                     # +x lug outer face
+    x1 = pts[0, 0] - LUG_W / 2                     # -x lug outer face
+    rot = trimesh.geometry.align_vectors([0, 0, 1], [1, 0, 0])
+
+    def place(part: trimesh.Trimesh, x: float) -> trimesh.Trimesh:
+        part.apply_transform(rot)
+        part.apply_translation((x, y_mid, Z_C))
+        return part
+
+    head = trimesh.creation.cylinder(radius=HEAD_R, height=HEAD_H, sections=32)
+    socket = trimesh.creation.cylinder(
+        radius=SOCKET_AF / np.sqrt(3), height=SOCKET_D * 2, sections=6)
+    socket.apply_translation((0, 0, HEAD_H / 2 - SOCKET_D / 2 + 0.0002))
+    head = trimesh.boolean.difference([head, socket], engine="manifold")
+
+    shaft_len = (x2 + 0.0005) - (x1 - NUT_H - 0.002)
+    shaft = trimesh.creation.cylinder(radius=SCREW_R, height=shaft_len, sections=24)
+    thread = _thread_helix(-shaft_len / 2, shaft_len / 2)
+
+    nut = trimesh.creation.cylinder(radius=NUT_AF / np.sqrt(3), height=NUT_H, sections=6)
+    nut_hole = trimesh.creation.cylinder(radius=SCREW_R, height=NUT_H * 3, sections=20)
+    nut = trimesh.boolean.difference([nut, nut_hole], engine="manifold")
+
+    x_shaft = (x2 + 0.0005 + x1 - NUT_H - 0.002) / 2
+    return trimesh.util.concatenate([
+        place(head, x2 + HEAD_H / 2),
+        place(shaft, x_shaft),
+        place(thread, x_shaft),
+        place(nut, x1 - NUT_H / 2),
+    ])
 
 
 def export_both(mesh: trimesh.Trimesh, name: str) -> None:
@@ -123,7 +188,8 @@ def export_both(mesh: trimesh.Trimesh, name: str) -> None:
     mm.apply_scale(1000.0)
     mm.export(OUT / f"{name}_mm.stl")
     mesh.export(ASSETS / f"{name}.stl")
-    print(f"{name}: {len(mesh.vertices)} verts, watertight={mesh.is_watertight}")
+    bodies = len(mesh.split(only_watertight=False)) if hasattr(mesh, "split") else "?"
+    print(f"{name}: {len(mesh.vertices)} verts, bodies={bodies}")
 
 
 def main() -> None:
@@ -133,9 +199,10 @@ def main() -> None:
     trimesh.repair.fix_normals(collar)
     export_both(collar, "tug_collar")
     export_both(clamp_screw(), "tug_clamp_screw")
+    bodies = collar.split(only_watertight=False)
     print(f"one-piece collar: {len(collar.vertices)} verts, "
           f"{len(collar.faces)} faces, watertight={collar.is_watertight}, "
-          f"volume={abs(collar.volume) * 1e3:.1f} cm^3")
+          f"connected_bodies={len(bodies)} (must be 1)")
     print("front eye at", EYE_FRONT.tolist(), " back eye at", EYE_BACK.tolist())
 
 
