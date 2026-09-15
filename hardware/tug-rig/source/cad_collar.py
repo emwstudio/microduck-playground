@@ -243,7 +243,8 @@ def clamp_screw() -> trimesh.Trimesh:
     socket.apply_translation((0, 0, HEAD_H / 2 - SOCKET_D / 2 + 0.0002))
     head = trimesh.boolean.difference([head, socket], engine="manifold")
 
-    shaft_len = (x2 + 0.0005) - (x1 - NUT_H - 0.002)
+    TAIL = 0.006                     # thread tail protruding past the nut
+    shaft_len = (x2 + 0.0005) - (x1 - NUT_H - TAIL)
     shaft = trimesh.creation.cylinder(radius=SCREW_R, height=shaft_len, sections=24)
     thread = _thread_helix(-shaft_len / 2, shaft_len / 2)
 
@@ -251,7 +252,7 @@ def clamp_screw() -> trimesh.Trimesh:
     nut_hole = trimesh.creation.cylinder(radius=SCREW_R, height=NUT_H * 3, sections=20)
     nut = trimesh.boolean.difference([nut, nut_hole], engine="manifold")
 
-    x_shaft = (x2 + 0.0005 + x1 - NUT_H - 0.002) / 2
+    x_shaft = (x2 + 0.0005 + x1 - NUT_H - TAIL) / 2
     return trimesh.util.concatenate([
         place(head, x2 + HEAD_H / 2),
         place(shaft, x_shaft),
