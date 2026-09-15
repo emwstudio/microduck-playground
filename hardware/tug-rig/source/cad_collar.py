@@ -78,8 +78,9 @@ THREAD_PITCH, THREAD_R = 0.0005, 0.00035
 # Ø9 mm so a Ø4 mm rope passes doubled (lark's head) or a Ø6 mm rope single
 # (bowline). The tube stands fully clear of the band face so the hole
 # channel is through; a cast neck cradles the ring from BELOW the channel.
-EYE_MAJOR, EYE_TUBE = 0.007, 0.0025
-EYE_INNER_R = EYE_MAJOR - EYE_TUBE           # Ø9 mm clear hole
+EYE_MAJOR, EYE_TUBE = 0.008, 0.0025
+EYE_INNER_R = EYE_MAJOR - EYE_TUBE           # Ø11 mm clear hole — Ø8 mm rope
+                                             # enters at a sag angle without clipping
 FACE_FRONT = float(shell_r(np.array([0.0]))[0]) + BAND_T / 2      # band outer surface, front
 FACE_BACK = float(shell_r(np.array([np.pi]))[0]) + BAND_T / 2     # band outer surface, back
 EYE_STANDOFF = 0.008   # eye centre this far past the band face — the whole
