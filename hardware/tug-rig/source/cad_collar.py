@@ -95,9 +95,20 @@ def band_mesh() -> trimesh.Trimesh:
     return band
 
 
+def split_ends() -> tuple[np.ndarray, np.ndarray]:
+    """The two split-end points with their TRUE local outward normals.
+
+    Never use band_path(2) for this: with only two points the gradient
+    degenerates to the secant between the ends, which flips the outward
+    normal INTO the duck's body (the 20 mm arms once speared the torso).
+    """
+    pts, n3 = band_path()
+    return np.array([pts[0], pts[-1]]), np.array([n3[0], n3[-1]])
+
+
 def lug_centre() -> np.ndarray:
     """Point on the screw axis: outboard on the lug arms, outside the ring."""
-    pts, n3 = band_path(2)
+    pts, n3 = split_ends()
     ends = pts + n3 * SCREW_OUT
     return np.array([(ends[0, 0] + ends[1, 0]) / 2,
                      (ends[0, 1] + ends[1, 1]) / 2, Z_C])
@@ -106,7 +117,7 @@ def lug_centre() -> np.ndarray:
 def lugs() -> trimesh.Trimesh:
     """Two ears at the split ends, rotated to the local band tangent so
     they face each other across the gap, drilled Ø3.2 along x."""
-    pts, n3 = band_path(2)
+    pts, n3 = split_ends()
     blocks = []
     for end, outward in zip(pts, n3):
         lug = trimesh.creation.box(extents=(LUG_W, LUG_OUT + BAND_T, LUG_H))
@@ -181,7 +192,7 @@ def clamp_screw() -> trimesh.Trimesh:
     the shaft between them. Separate shells on purpose — screw and nut are
     different physical parts (the STL is an assembly).
     """
-    pts, _ = band_path(2)
+    pts, _ = split_ends()
     centre = lug_centre()
     x2 = pts[1, 0] + LUG_W / 2 + 0.001           # +x lug outer face
     x1 = pts[0, 0] - LUG_W / 2 - 0.001           # -x lug outer face
@@ -239,7 +250,12 @@ def main() -> None:
           f"connected_bodies={len(bodies)} (must be 1)")
     assert len(bodies) == 1, "collar is not one connected piece"
     assert hole_gauge_ok(collar), "tow-eye hole channel is blocked"
-    print("hole gauge (Ø8 mm pin through each eye): CLEAR")
+    ends, outs = split_ends()
+    for e, o in zip(ends, outs):
+        tip = e + o * LUG_OUT
+        assert np.hypot(*tip[:2]) > np.hypot(*e[:2]) + LUG_OUT * 0.9, \
+            "lug arms point INWARD (into the duck's body)"
+    print("hole gauge (Ø8 mm pin through each eye): CLEAR; lug arms point OUTWARD")
     print("front eye at", EYE_FRONT.tolist(), " back eye at", EYE_BACK.tolist())
 
 
