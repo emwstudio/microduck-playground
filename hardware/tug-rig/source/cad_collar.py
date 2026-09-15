@@ -165,13 +165,11 @@ def lugs() -> trimesh.Trimesh:
 
 
 def tow_eye(center: np.ndarray) -> trimesh.Trimesh:
-    """Closed D-ring fused to the band by a cast neck boss (ONE solid).
-
-    D-ring orientation: ring plane VERTICAL and fore-aft (xz plane, hole
-    axis along y) — the rope threads from the side and the pull stays in
-    the ring's plane, the way a leash D-ring is loaded. The neck boss
-    bridges from inside the band to the ring's band-side arc, stopping at
-    the hole boundary, so the Ø9 mm side-hole is unobstructed.
+    """Pad eye fused to the band as ONE solid "D": the ring's body-side is
+    a solid RECTANGULAR boss (10×14 mm) filling the whole gap between the
+    band and the ring's inner arc — the pull transfers through the full
+    rectangle, not a thin neck. The boss stops 0.5 mm short of the hole
+    channel so the Ø9 mm hole stays clear.
     """
     ring = trimesh.creation.torus(major_radius=EYE_MAJOR, minor_radius=EYE_TUBE,
                                   major_sections=48, minor_sections=14)
@@ -179,13 +177,11 @@ def tow_eye(center: np.ndarray) -> trimesh.Trimesh:
     ring.apply_translation(center)
     sign = 1.0 if center[0] > 0 else -1.0
     band_face = sign * (abs(center[0]) - 0.002 - EYE_MAJOR - EYE_TUBE)
-    neck_x0 = band_face - sign * BAND_T        # inside the band
-    neck_x1 = center[0] + sign * 0.002         # past the ring's bottom tube
-    neck = trimesh.creation.box(extents=(abs(neck_x1 - neck_x0), 0.006, 0.004))
-    # horizontal bar hugging the tube's underside; its top face stays
-    # 0.5 mm below the hole channel (bottom edge = Z_C - EYE_INNER_R)
-    neck.apply_translation(((neck_x0 + neck_x1) / 2, 0.0, Z_C - EYE_MAJOR))
-    return trimesh.boolean.union([ring, neck], engine="manifold")
+    neck_x0 = band_face - sign * BAND_T                       # inside the band
+    neck_x1 = center[0] - sign * (EYE_INNER_R + 0.0005)       # fill to 0.5 mm off the hole
+    boss = trimesh.creation.box(extents=(abs(neck_x1 - neck_x0), 0.010, BAND_H))
+    boss.apply_translation(((neck_x0 + neck_x1) / 2, 0.0, Z_C))
+    return trimesh.boolean.union([ring, boss], engine="manifold")
 
 
 def hole_gauge_ok(collar: trimesh.Trimesh) -> bool:
