@@ -30,13 +30,12 @@ The standoff pack + velcro strap above is superseded by a one-piece **clamp
 collar** (`tug_collar.stl` + `tug_clamp_screw.stl`): a 14×2.2 mm band
 following the shell contour (front +34 mm, back -48 mm, sides ±49 mm at
 band height z = -4 mm — above the hip-shell bulge so the clamp is visible
-from the side), SPLIT (~28 mm) on the +y side with two 6 mm
-lugs rotated to the local band tangent — drilled **Ø3.2 mm through-holes**
-take an **M3 socket-head cap screw** (modelled with 2.5 mm hex socket and
-M3×0.5 thread, black-oxide finish in sim for contrast) and hex nut. The
-**~22 mm between the lug faces** is generous screw travel: tightening
-genuinely closes the gap and clamps the band onto the shell by friction
-(hose-clamp principle). The tow eyes are D-ring style: ring plane
+from the side), SPLIT (~18 mm) on the +y side with two slim cantilever
+lugs (5×8 mm, rotated to the local band tangent) reaching radially
+OUTBOARD — the **M3 socket-head cap screw** (Ø3.2 mm holes, 2.5 mm hex
+socket, M3×0.5 thread, black-oxide in sim) bridges the lug tips ~7 mm
+OUTSIDE the ring's outer surface, hose-clamp style. Tightening pulls the
+lug arms together and clamps the band onto the shell by friction. The tow eyes are D-ring style: ring plane
 VERTICAL and fore-aft (rope threads from the side, pull stays in the
 ring's plane), **fused to the band by cast neck bosses** — the collar STL
 is verified as ONE connected shell (`connected_bodies == 1` at
