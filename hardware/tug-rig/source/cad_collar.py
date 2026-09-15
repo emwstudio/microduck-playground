@@ -115,14 +115,15 @@ def lug_centre() -> np.ndarray:
 
 
 def lugs() -> trimesh.Trimesh:
-    """Two ears at the split ends, rotated to the local band tangent so
-    they face each other across the gap, drilled Ø3.2 along x."""
+    """Two ears at the split ends. Both are axis-aligned and PARALLEL with
+    their faces perpendicular to the screw axis (x) — the screw head and
+    nut seat flat on the faces, so clamping force transfers squarely.
+    (Tangent-rotated lugs splay ±12° and the head/nut would bear on an
+    edge.) Drilled Ø3.2 along x."""
     pts, n3 = split_ends()
     blocks = []
     for end, outward in zip(pts, n3):
         lug = trimesh.creation.box(extents=(LUG_W, LUG_OUT + BAND_T, LUG_H))
-        lug.apply_transform(trimesh.transformations.rotation_matrix(
-            np.arctan2(outward[1], outward[0]) - np.pi / 2, [0, 0, 1]))
         lug.apply_translation(end + outward * (LUG_OUT / 2))
         blocks.append(lug)
     pair = trimesh.boolean.union(blocks, engine="manifold")
