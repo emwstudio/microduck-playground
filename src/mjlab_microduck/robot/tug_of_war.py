@@ -370,25 +370,17 @@ KNOT_MAJOR = 0.0045      # rope coil cinching the eye's rim on the pull side (la
 
 
 def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
-    """Rope coiled ~2 turns around the pad eye's rim on the pull side, plus
-    a short working-end stub poking through the hole (along y) — how a real
-    rope ties onto a D-ring: the standing part cinches on the rim, the
-    working end threads the hole. Static per duck."""
-    turns, pitch = 2.0, 0.003
-    t = np.linspace(0.0, 2.0 * np.pi * turns, 64)
-    coil_pts = np.stack([KNOT_MAJOR * np.cos(t),
-                         (t / (2 * np.pi * turns) - 0.5) * turns * pitch,
-                         KNOT_MAJOR * np.sin(t)], axis=1)
-    verts, normals, uvs, faces = _sweep_smooth(coil_pts)
-    uvs[:, 0] *= (turns * 2.0 * np.pi * KNOT_MAJOR) / (3.5 * 2.0 * SPAN_RADIUS)
-    stub_pts = np.stack([np.zeros(9), np.linspace(-0.007, 0.007, 9), np.zeros(9)], axis=1)
-    sv, sn, su, sf = _sweep_smooth(stub_pts)
-    su[:, 0] *= 0.014 / (3.5 * 2.0 * SPAN_RADIUS)
-    stub_off = np.array([EYE_RING_MAJOR - EYE_INNER_R + 0.0025, 0.0, 0.0])
-    verts = np.concatenate([verts, sv + stub_off])
-    normals = np.concatenate([normals, sn])
-    uvs = np.concatenate([uvs, su])
-    faces = np.concatenate([faces, sf + len(verts) - len(sv)])
+    """Lark's-head bight on the eye's near rim: ONE clean loop of rope in
+    the xy plane wrapping the rim section — inner strand threads the hole
+    along y (out one face, back the other), outer strand wraps the plate's
+    outside. The span rope ends into the loop. No coil blob — the two
+    strands through the tunnel must READ as rope in the hole.
+    """
+    t = np.linspace(0.0, 2.0 * np.pi, 41)
+    a, b = 0.007, 0.0075
+    loop_pts = np.stack([a * np.cos(t), b * np.sin(t), np.zeros_like(t)], axis=1)
+    verts, normals, uvs, faces = _sweep_smooth(loop_pts)
+    uvs[:, 0] *= (2 * np.pi * a) / (3.5 * 2.0 * SPAN_RADIUS)
     mesh = spec.add_mesh(name=name)
     mesh.uservert = verts.flatten().astype(np.float32)
     mesh.usernormal = normals.flatten().astype(np.float32)
