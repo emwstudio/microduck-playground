@@ -27,18 +27,23 @@ Contacts with trunk_base at the rail feet are the INTENDED mounting interface
 ## Fastening — clamp collar (current design, cad_collar.py)
 
 The standoff pack + velcro strap above is superseded by a one-piece **clamp
-collar** (`tug_collar.stl` + `tug_clamp_screw.stl`): a 14×2.2 mm band
-following the shell contour (front +34 mm, back -48 mm, sides ±49 mm at
-band height z = -4 mm — above the hip-shell bulge so the clamp is visible
-from the side), SPLIT (~12 mm) on the +y side with two slim PARALLEL
-cantilever lugs (3×8 mm, faces exactly perpendicular to the screw axis so
-the head and nut seat flat and clamp squarely, ~9 mm between the lug
-faces) reaching 10 mm radially
-OUTBOARD — the **M3 socket-head cap screw** (Ø3.2 mm holes, 2.5 mm hex
-socket, M3×0.5 thread, black-oxide in sim) bridges the lugs ~6 mm
-OUTSIDE the ring's outer surface, so the hex key tightens it with zero
-obstruction from the ring. Tightening pulls the lug arms together and
-clamps the band onto the shell by friction. The tow eyes are D-ring style: ring plane
+collar** (`tug_collar.stl` + `tug_clamp_screw.stl`). The band's contour is
+**measured from the upstream model**: `measure_torso_contour.py` cuts
+triangle sections through every trunk_base mesh in robot_allcollisions.xml
+across the band height and reduces each 5° bin to the outermost radius
+(front 22.8 mm, back 46 mm, sides 32 mm) — the 14×2.2 mm band follows that
+contour with a 1.2 mm clamping allowance, wrapping the purple shell at
+**z = +18 mm** (mid-shell; the shell's real triangle surface spans
+z 0.3-42 mm — an earlier z=-4 mm band sat BELOW the shell on the bare
+frame, which is why it looked loose). The band is SPLIT (~12 mm) on the
++y side with two slim PARALLEL cantilever lugs (3×8 mm, faces exactly
+perpendicular to the screw axis so the head and nut seat flat and clamp
+squarely, ~9 mm between the lug faces) reaching 10 mm radially OUTBOARD —
+the **M3 socket-head cap screw** (Ø3.2 mm holes, 2.5 mm hex socket,
+M3×0.5 thread, black-oxide in sim) bridges the lugs ~6 mm OUTSIDE the
+ring's outer surface, so the hex key tightens it with zero obstruction
+from the ring. Tightening pulls the lug arms together and clamps the band
+onto the shell by friction. The tow eyes are D-ring style: ring plane
 VERTICAL and fore-aft (rope threads from the side, pull stays in the
 ring's plane), **fused to the band by cast neck bosses** — the collar STL
 is verified as ONE connected shell (`connected_bodies == 1` at
@@ -46,8 +51,8 @@ generation). Each eye has a **clear Ø9 mm hole** (Ø4 mm rope passes
 doubled for a lark's head; Ø6 mm single for a bowline) — the generator
 pushes a Ø8 mm gauge pin sideways through each eye and asserts the
 channel is unobstructed:
-front eye (chest pull) at x = +46.6 mm, back eye (butt pull) at
-x = -60.6 mm, both at z = -4 mm. The whole tug force path flows through
+front eye (chest pull) at x = +38.2 mm, back eye (butt pull) at
+x = -61.1 mm, both at z = +18 mm. The whole tug force path flows through
 the collar; no panel, standoffs or webbing are needed. The pack + strap
 STLs are kept in meshes/ as an archived alternative.
 
