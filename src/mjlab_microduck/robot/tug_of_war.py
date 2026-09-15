@@ -649,9 +649,10 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
         nominal = gap if pa == red[0] else spacing
         link_len = nominal + ROPE_SLACK
         site_a, site_b = _span_hook_sites(pa, pb, red)
-        # pa is at smaller x (chain runs -x → +x): pa's knot faces +x, pb's faces -x
-        knot_use.append((pa, site_a, +1.0))
-        knot_use.append((pb, site_b, -1.0))
+        # The knot coils the rim FACING the other duck. Red ducks are
+        # rotated 180° (world +x = their trunk-local -x), blue are not.
+        knot_use.append((pa, site_a, (1.0 if pa in blue else -1.0) * +1.0))
+        knot_use.append((pb, site_b, (1.0 if pb in blue else -1.0) * -1.0))
         cord = parent.add_tendon(
             name=f"tug_{pa or 'r0_'}{pb}cord",
             stiffness=ROPE_STIFFNESS,
