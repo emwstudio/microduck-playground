@@ -79,8 +79,10 @@ EYE_MAJOR, EYE_TUBE = 0.007, 0.0025
 EYE_INNER_R = EYE_MAJOR - EYE_TUBE           # Ø9 mm clear hole
 FACE_FRONT = float(shell_r(np.array([0.0]))[0]) + BAND_T / 2      # band outer surface, front
 FACE_BACK = float(shell_r(np.array([np.pi]))[0]) + BAND_T / 2     # band outer surface, back
-EYE_FRONT = np.array([FACE_FRONT + 0.002 + EYE_MAJOR + EYE_TUBE, 0.0, Z_C])
-EYE_BACK = np.array([-(FACE_BACK + 0.002 + EYE_MAJOR + EYE_TUBE), 0.0, Z_C])
+EYE_STANDOFF = 0.008   # eye centre this far past the band face — the whole
+                        # eye head clears the band rim (it was hidden behind it)
+EYE_FRONT = np.array([FACE_FRONT + EYE_STANDOFF + EYE_MAJOR + EYE_TUBE, 0.0, Z_C])
+EYE_BACK = np.array([-(FACE_BACK + EYE_STANDOFF + EYE_MAJOR + EYE_TUBE), 0.0, Z_C])
 
 OUT = Path(__file__).resolve().parent.parent / "meshes"
 ASSETS = Path(__file__).resolve().parents[3] / "src/mjlab_microduck/robot/microduck/assets"
@@ -175,7 +177,7 @@ def tow_eye(center: np.ndarray) -> trimesh.Trimesh:
     from shapely.geometry import Point, box as shapely_box
     from shapely.ops import unary_union
     sign = 1.0 if center[0] > 0 else -1.0
-    band_face = sign * (abs(center[0]) - 0.002 - EYE_MAJOR - EYE_TUBE)
+    band_face = sign * (abs(center[0]) - EYE_STANDOFF - EYE_MAJOR - EYE_TUBE)
     head = Point(float(center[0]), Z_C).buffer(EYE_MAJOR + EYE_TUBE, resolution=48)
     stem = shapely_box(min(band_face - sign * BAND_T, center[0] + sign * 0.001),
                        Z_C - 0.005,
