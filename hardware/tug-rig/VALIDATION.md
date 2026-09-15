@@ -44,16 +44,16 @@ M3×0.5 thread, black-oxide in sim) bridges the lugs ~6 mm OUTSIDE the
 ring's outer surface, so the hex key tightens it with zero obstruction
 from the ring. Tightening pulls the lug arms together and clamps the band
 onto the shell by friction. The tow eyes are one-piece pad-eye PLATES
-(5 mm thick, lollipop profile: rectangular stem flaring into a circular
-head around the hole, shoulders filleted — ring and boss read as one cast
-part), plane VERTICAL and fore-aft (rope threads from the side, pull
-stays in the eye's plane), fused into the band — the collar STL is
-verified as ONE connected shell (`connected_bodies == 1` at generation). Each eye has a **clear Ø9 mm hole** (Ø4 mm rope passes
-doubled for a lark's head; Ø6 mm single for a bowline) — the generator
-pushes a Ø8 mm gauge pin sideways through each eye and asserts the
-channel is unobstructed:
-front eye (chest pull) at x = +45.0 mm, back eye (butt pull) at
-x = -67.6 mm, both at z = +16 mm. The whole tug force path flows through
+(5 mm thick annulus facing fore-aft — the hole axis runs ALONG the pull
+direction: a fore-aft rope can only thread a fore-aft hole; a side-facing
+plate forces the rope to pierce the rim no matter the hole size), each
+bridged to the band by a cast boss below the hole — verified as ONE
+connected shell (`connected_bodies == 1` at generation). Each eye has a **clear Ø11 mm hole** (Ø8 mm rope enters at a sag
+angle without touching the rim) — the generator pushes a gauge pin along
+the pull direction through each eye and asserts the channel is
+unobstructed:
+front eye (chest pull) at x = +46.0 mm, back eye (butt pull) at
+x = -68.6 mm, both at z = +16 mm. The whole tug force path flows through
 the collar; no panel, standoffs or webbing are needed. The pack + strap
 STLs are kept in meshes/ as an archived alternative.
 

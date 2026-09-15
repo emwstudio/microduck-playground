@@ -350,13 +350,14 @@ def _site_world(data: mujoco.MjData, body_id: int, local: np.ndarray,
 
 
 def _local_span_curve(chord: float, sag: float) -> np.ndarray:
-    """Sagging rope in its local frame: x from -chord/2..+chord/2 (ends AT
-    the wrap sites — the knot lumps hide the tips; an 8% overshoot used to
-    stick out of the ring like a horn), -z parabola, slight lateral bow."""
-    t = np.linspace(0.0, 1.0, SPAN_T_SEGMENTS)
+    """Sagging rope in its local frame: x from -chord/2..+chord/2, ends AT
+    the wrap sites with ZERO slope (sin² profile) — the rope leaves the
+    knot exactly along the pull direction, so it passes the eye's tunnel
+    straight, no rim contact. A parabola leaves at ±4·sag slope and clips."""
+    t = np.linspace(-0.03, 1.03, SPAN_T_SEGMENTS)
     points = np.zeros((SPAN_T_SEGMENTS, 3))
     points[:, 0] = (t - 0.5) * chord
-    points[:, 2] = -4.0 * sag * t * (1.0 - t)
+    points[:, 2] = -sag * np.sin(np.pi * t) ** 2
     points[:, 1] = min(0.006, 0.5 * sag + 0.001) * np.sin(np.pi * t)
     return points
 
@@ -368,13 +369,14 @@ KNOT_MAJOR = 0.0045      # rope coil cinching the eye's outer bar (lark's head)
 
 
 def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
-    """Rope coiled ~2 turns around the pad eye's outer bar — a wound
-    lark's-head knot where the rope ties off. Static per duck (eyes ride
-    on the trunk)."""
+    """Rope coiled ~2 turns around the pad eye's bottom tube (tangent along
+    y, so the coil's axis is y) — a wound lark's-head knot where the rope
+    ties off. Static per duck (eyes ride on the trunk)."""
     turns, pitch = 2.0, 0.003
     t = np.linspace(0.0, 2.0 * np.pi * turns, 64)
-    pts = np.stack([KNOT_MAJOR * np.cos(t), KNOT_MAJOR * np.sin(t),
-                    (t / (2 * np.pi * turns) - 0.5) * turns * pitch], axis=1)
+    pts = np.stack([KNOT_MAJOR * np.cos(t),
+                    (t / (2 * np.pi * turns) - 0.5) * turns * pitch,
+                    KNOT_MAJOR * np.sin(t)], axis=1)
     verts, normals, uvs, faces = _sweep_smooth(pts)
     uvs[:, 0] *= (turns * 2.0 * np.pi * KNOT_MAJOR) / (3.5 * 2.0 * SPAN_RADIUS)
     mesh = spec.add_mesh(name=name)
@@ -391,12 +393,11 @@ def _add_knots(spec: mujoco.MjSpec, knot_use: dict[str, set[str]], red: list[str
         team = "red" if prefix in red else "blue"
         for site in sites:
             eye = ring_local(team) if site == "rope_hook" else chest_local(team)
-            sign = 1.0 if eye[0] > 0 else -1.0
             trunk.add_geom(
                 name=f"{prefix}tug_knot_{site}",
                 type=mujoco.mjtGeom.mjGEOM_MESH,
                 meshname="tug_knot",
-                pos=(eye[0] + sign * EYE_RING_MAJOR, 0.0, eye[2]),
+                pos=(eye[0], 0.0, eye[2] - EYE_RING_MAJOR),
                 material="tug_twist",
                 contype=0,
                 conaffinity=0,
