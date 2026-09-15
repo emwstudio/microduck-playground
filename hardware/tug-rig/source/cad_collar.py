@@ -165,36 +165,38 @@ def lugs() -> trimesh.Trimesh:
 
 
 def tow_eye(center: np.ndarray) -> trimesh.Trimesh:
-    """Closed ring fused to the band by a cast neck boss (ONE solid).
+    """Closed D-ring fused to the band by a cast neck boss (ONE solid).
 
-    Eyebolt orientation: ring plane vertical and facing fore-aft (hole
-    axis ALONG the pull direction x) — from the front/back the eye reads
-    as a clean "O" instead of an edge-on sliver merging with the frame
-    plates behind it. The neck boss bridges from inside the band to the
-    ring's bottom tube, staying 0.5 mm below the hole channel.
+    D-ring orientation: ring plane VERTICAL and fore-aft (xz plane, hole
+    axis along y) — the rope threads from the side and the pull stays in
+    the ring's plane, the way a leash D-ring is loaded. The neck boss
+    bridges from inside the band to the ring's band-side arc, stopping at
+    the hole boundary, so the Ø9 mm side-hole is unobstructed.
     """
     ring = trimesh.creation.torus(major_radius=EYE_MAJOR, minor_radius=EYE_TUBE,
                                   major_sections=48, minor_sections=14)
-    ring.apply_transform(trimesh.geometry.align_vectors([0, 0, 1], [1, 0, 0]))
+    ring.apply_transform(trimesh.geometry.align_vectors([0, 0, 1], [0, 1, 0]))
     ring.apply_translation(center)
     sign = 1.0 if center[0] > 0 else -1.0
     band_face = sign * (abs(center[0]) - 0.002 - EYE_MAJOR - EYE_TUBE)
     neck_x0 = band_face - sign * BAND_T        # inside the band
     neck_x1 = center[0] + sign * 0.002         # past the ring's bottom tube
     neck = trimesh.creation.box(extents=(abs(neck_x1 - neck_x0), 0.006, 0.004))
+    # horizontal bar hugging the tube's underside; its top face stays
+    # 0.5 mm below the hole channel (bottom edge = Z_C - EYE_INNER_R)
     neck.apply_translation(((neck_x0 + neck_x1) / 2, 0.0, Z_C - EYE_MAJOR))
     return trimesh.boolean.union([ring, neck], engine="manifold")
 
 
 def hole_gauge_ok(collar: trimesh.Trimesh) -> bool:
-    """Push a Ø8 mm gauge pin along x (the pull direction) through each eye
-    centre: the collar must not intersect it (hole channel clear)."""
-    span = 2 * (EYE_MAJOR + EYE_TUBE)   # exactly the ring's tube extent:
-    # the rope's channel is through the ring; a longer pin would rake the
-    # band's shoulders beside the narrow nose, which the rope never touches
+    """Push a Ø8 mm gauge pin SIDEWAYS (along y) through each eye centre:
+    the collar must not intersect it (hole channel clear for the rope)."""
+    span = 2 * (EYE_MAJOR + EYE_TUBE) + 0.004   # ring tube extent + small margin
+    # (longer pins would sweep the neighbouring band at ±20° — the rope
+    # never goes there; the channel that matters is through the ring)
     for center in (EYE_FRONT, EYE_BACK):
         pin = trimesh.creation.cylinder(radius=EYE_INNER_R - 0.0005, height=span, sections=24)
-        pin.apply_transform(trimesh.geometry.align_vectors([0, 0, 1], [1, 0, 0]))
+        pin.apply_transform(trimesh.geometry.align_vectors([0, 0, 1], [0, 1, 0]))
         pin.apply_translation(center)
         if trimesh.boolean.intersection([collar, pin], engine="manifold").volume > 1e-12:
             return False
