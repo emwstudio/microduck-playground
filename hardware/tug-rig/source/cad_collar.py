@@ -28,12 +28,12 @@ import trimesh
 
 # --- measured duck dimensions (metres, trunk-local) ---
 XF, XB, HW = 0.034, 0.048, 0.049   # band centreline: front / back / side reach
-Z_C = -0.010                        # band centre height (mid torso)
+Z_C = -0.004                        # band centre height — above the hip-shell bulge so the clamp reads on camera
 BAND_H, BAND_T = 0.014, 0.0022     # band cross-section: vertical × radial
-GAP_HALF = 0.34                     # split half-angle at the +y side (~28 mm gap)
+GAP_HALF = 0.60                     # split half-angle at the +y side (~50 mm gap — reads on video)
 
 # --- clamp hardware ---
-LUG_W, LUG_OUT, LUG_H = 0.006, 0.007, 0.012   # ~6 mm between the lug faces: screw travel to clamp
+LUG_W, LUG_OUT, LUG_H = 0.006, 0.010, 0.012   # ~48 mm between the lug faces: big screw travel, reads on video
 HOLE_R = 0.0016                     # Ø3.2 mm clearance hole through the lugs
 SCREW_R, SCREW_LEN = 0.0015, 0.024
 HEAD_R, HEAD_H = 0.00275, 0.003    # M3 socket head: Ø5.5 × 3 mm
@@ -94,19 +94,31 @@ def band_mesh() -> trimesh.Trimesh:
     return band
 
 
+def lug_centre() -> np.ndarray:
+    """Point on the screw axis midway between the two lug centres."""
+    pts, n3 = band_path(2)
+    ends = pts + n3 * (LUG_OUT / 2)
+    return np.array([(ends[0, 0] + ends[1, 0]) / 2,
+                     (ends[0, 1] + ends[1, 1]) / 2, Z_C])
+
+
 def lugs() -> trimesh.Trimesh:
-    """Two ears at the split ends, protruding +y, drilled Ø3.2 along x."""
-    pts, _ = band_path(2)
+    """Two ears at the split ends, rotated to the local band tangent so
+    they face each other across the gap, drilled Ø3.2 along x."""
+    pts, n3 = band_path(2)
     blocks = []
-    for end in pts:
+    for end, outward in zip(pts, n3):
         lug = trimesh.creation.box(extents=(LUG_W, LUG_OUT + BAND_T, LUG_H))
-        lug.apply_translation((end[0], end[1] + LUG_OUT / 2, Z_C))
+        lug.apply_transform(trimesh.transformations.rotation_matrix(
+            np.arctan2(outward[1], outward[0]) - np.pi / 2, [0, 0, 1]))
+        lug.apply_translation(end + outward * (LUG_OUT / 2))
         blocks.append(lug)
     pair = trimesh.boolean.union(blocks, engine="manifold")
-    y_mid = pts[0, 1] + LUG_OUT / 2
-    hole = trimesh.creation.cylinder(radius=HOLE_R, height=LUG_W * 3, sections=24)
+    centre = lug_centre()
+    span = abs(pts[1, 0] - pts[0, 0]) + LUG_W * 2 + 0.01
+    hole = trimesh.creation.cylinder(radius=HOLE_R, height=span, sections=24)
     hole.apply_transform(trimesh.geometry.align_vectors([0, 0, 1], [1, 0, 0]))
-    hole.apply_translation((0.0, y_mid, Z_C))
+    hole.apply_translation(centre)
     return trimesh.boolean.difference([pair, hole], engine="manifold")
 
 
@@ -169,14 +181,14 @@ def clamp_screw() -> trimesh.Trimesh:
     different physical parts (the STL is an assembly).
     """
     pts, _ = band_path(2)
-    y_mid = pts[0, 1] + LUG_OUT / 2
-    x2 = pts[1, 0] + LUG_W / 2                     # +x lug outer face
-    x1 = pts[0, 0] - LUG_W / 2                     # -x lug outer face
+    centre = lug_centre()
+    x2 = pts[1, 0] + LUG_W / 2 + 0.001           # +x lug outer face
+    x1 = pts[0, 0] - LUG_W / 2 - 0.001           # -x lug outer face
     rot = trimesh.geometry.align_vectors([0, 0, 1], [1, 0, 0])
 
     def place(part: trimesh.Trimesh, x: float) -> trimesh.Trimesh:
         part.apply_transform(rot)
-        part.apply_translation((x, y_mid, Z_C))
+        part.apply_translation((x, centre[1], Z_C))
         return part
 
     head = trimesh.creation.cylinder(radius=HEAD_R, height=HEAD_H, sections=32)

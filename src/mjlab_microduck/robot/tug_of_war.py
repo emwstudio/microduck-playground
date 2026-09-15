@@ -115,9 +115,9 @@ SPAN_ALPHA_SEGMENTS = 6
 # front (chest pull) and back (butt pull). Sites sit at the eye centres.
 TEAM_Y = 0.0
 RING_LOCAL_X = -0.0606
-RING_LOCAL_Z = -0.010
+RING_LOCAL_Z = -0.004
 RING_LOCAL_Y = 0.0
-CHEST_LOCAL = np.array([0.0466, 0.0, -0.010])
+CHEST_LOCAL = np.array([0.0466, 0.0, -0.004])
 SPAWN_Y = TEAM_Y
 
 
@@ -245,7 +245,7 @@ def _add_rig_materials(spec: mujoco.MjSpec) -> None:
     paint.specular = 0.8
     paint.shininess = 0.6
     steel = spec.add_material(name="tug_steel")
-    steel.rgba = (0.68, 0.70, 0.74, 1.0)
+    steel.rgba = (0.10, 0.10, 0.12, 1.0)   # black-oxide screw: pops against the alu collar
     steel.specular = 0.9
     steel.shininess = 0.7
     orange = spec.add_material(name="tug_carabiner")
