@@ -30,13 +30,16 @@ The standoff pack + velcro strap above is superseded by a one-piece **clamp
 collar** (`tug_collar.stl` + `tug_clamp_screw.stl`): a 14×2.2 mm band
 following the shell contour (front +34 mm, back -48 mm, sides ±49 mm at
 band height z = -10 mm, i.e. ~1-2 mm clamping allowance), SPLIT on the +y
-side with two lugs — an M3 screw through the lugs tightens the band's
-friction grip on the shell (hose-clamp / shaft-collar principle). The tow
-eyes are closed rings integrated in the same print: front eye (chest pull)
-at x = +39 mm, back eye (butt pull) at x = -53 mm, both at z = -10 mm.
-The whole tug force path flows through the collar; no panel, standoffs or
-webbing are needed. The pack + strap STLs are kept in meshes/ as an
-archived alternative.
+side with two lugs — drilled **Ø3.2 mm through-holes** take an **M3
+socket-head cap screw** (modelled with 2.5 mm hex socket and M3×0.5
+thread) and hex nut; tightening the screw closes the split and clamps the
+band onto the shell by friction (hose-clamp principle). The tow eyes are
+closed rings **fused to the band by cast neck bosses** — the collar STL is
+verified as ONE connected shell (`connected_bodies == 1` at generation):
+front eye (chest pull) at x = +39 mm, back eye (butt pull) at x = -53 mm,
+both at z = -10 mm. The whole tug force path flows through the collar; no
+panel, standoffs or webbing are needed. The pack + strap STLs are kept in
+meshes/ as an archived alternative.
 
 Collar contact/clearance validation against the leg swing envelope is
 pending; the band sits at mid-torso, above the hip joint line.
