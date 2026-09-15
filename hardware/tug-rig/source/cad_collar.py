@@ -30,10 +30,11 @@ import trimesh
 XF, XB, HW = 0.034, 0.048, 0.049   # band centreline: front / back / side reach
 Z_C = -0.004                        # band centre height — above the hip-shell bulge so the clamp reads on camera
 BAND_H, BAND_T = 0.014, 0.0022     # band cross-section: vertical × radial
-GAP_HALF = 0.34                     # split half-angle at the +y side (~28 mm gap, ~22 mm between lug faces)
+GAP_HALF = 0.21                     # split half-angle at the +y side (~18 mm gap, ~13 mm between lug faces)
 
 # --- clamp hardware ---
-LUG_W, LUG_OUT, LUG_H = 0.006, 0.010, 0.012   # ~48 mm between the lug faces: big screw travel, reads on video
+LUG_W, LUG_OUT, LUG_H = 0.005, 0.012, 0.008   # slim cantilever arms reaching outside the ring
+SCREW_OUT = 0.009                   # screw axis this far beyond the band surface (outside the ring)
 HOLE_R = 0.0016                     # Ø3.2 mm clearance hole through the lugs
 SCREW_R, SCREW_LEN = 0.0015, 0.024
 HEAD_R, HEAD_H = 0.00275, 0.003    # M3 socket head: Ø5.5 × 3 mm
@@ -95,9 +96,9 @@ def band_mesh() -> trimesh.Trimesh:
 
 
 def lug_centre() -> np.ndarray:
-    """Point on the screw axis midway between the two lug centres."""
+    """Point on the screw axis: outboard on the lug arms, outside the ring."""
     pts, n3 = band_path(2)
-    ends = pts + n3 * (LUG_OUT / 2)
+    ends = pts + n3 * SCREW_OUT
     return np.array([(ends[0, 0] + ends[1, 0]) / 2,
                      (ends[0, 1] + ends[1, 1]) / 2, Z_C])
 
