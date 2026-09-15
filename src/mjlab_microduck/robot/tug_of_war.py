@@ -272,7 +272,7 @@ def _add_harness_rings(spec: mujoco.MjSpec, n_per_team: int) -> None:
             name=f"{prefix}tug_collar",
             type=mujoco.mjtGeom.mjGEOM_MESH,
             meshname="tug_collar_stl",
-            material="tug_frame_paint",
+            material="tug_carabiner",
             contype=0,
             conaffinity=0,
             density=0.0,
