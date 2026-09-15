@@ -360,7 +360,7 @@ def _local_span_curve(chord: float, sag: float) -> np.ndarray:
     return points
 
 
-SPAN_RADIUS = 0.008
+SPAN_RADIUS = 0.004   # Ø8 mm rope — threads the Ø9 mm pad-eye holes cleanly
 SPAN_SMOOTH_ALPHA = 16
 
 
@@ -531,13 +531,15 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         ci = int(np.argmin(np.abs(CHORD_BINS - chord)))
         si = int(np.argmin(np.abs(np.array(SAG_BINS) * SAG_MAX - sag)))
         model.geom_dataid[span.geom_id] = span.variant_mesh_ids[ci, si]
-        # Mocap frame: x along the chord, local -z as close to world-down
-        # as the chord allows, so the baked sag always points down.
+        # Mocap frame: x along the chord; local +z as close to world-UP as
+        # the chord allows, so the baked sag (local -z) points DOWN.
+        # (The previous mapping put z_axis = down, which flipped the baked
+        # sag skyward — invisible in taut match footage, obvious at slack.)
         x_axis = chord_vec / chord
-        down = np.array([0.0, 0.0, -1.0])
-        z_axis = down - np.dot(down, x_axis) * x_axis
+        up = np.array([0.0, 0.0, 1.0])
+        z_axis = up - np.dot(up, x_axis) * x_axis
         zn = np.linalg.norm(z_axis)
-        z_axis = z_axis / zn if zn > 1e-6 else np.array([0.0, 0.0, -1.0])
+        z_axis = z_axis / zn if zn > 1e-6 else np.array([0.0, 0.0, 1.0])
         y_axis = np.cross(z_axis, x_axis)
         rot[0::3] = x_axis
         rot[1::3] = y_axis
