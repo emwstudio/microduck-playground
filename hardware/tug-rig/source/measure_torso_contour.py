@@ -23,7 +23,8 @@ import numpy as np
 ROBOT_XML = Path(__file__).resolve().parents[3] / "src/mjlab_microduck/robot/microduck/robot_allcollisions.xml"
 OUT = Path(__file__).resolve().parent.parent / "torso_contour.json"
 
-Z_C = 0.018          # band centre height (mid purple shell: z 0.0003..0.042)
+Z_C = 0.016          # band centre height — mid purple shell (z 0.0003..0.042),
+                     # 2 mm lower keeps the neck servo (neck/xl330) clear
 BAND_H = 0.014       # band height — sections cover [Z_C-H/2, Z_C+H/2]
 N_BINS = 72
 
@@ -66,7 +67,9 @@ def section_points(meshes, z0: float) -> np.ndarray:
 
 def main() -> None:
     meshes = trunk_meshes()
-    zs = np.linspace(Z_C - BAND_H / 2 + 0.0005, Z_C + BAND_H / 2 - 0.0005, 7)
+    # cover the full band height PLUS 0.5 mm both rims — the shell lip flares
+    # right at the band edges, and an uncovered lip grazed the rim (0.41 mm)
+    zs = np.linspace(Z_C - BAND_H / 2 - 0.0005, Z_C + BAND_H / 2 + 0.0005, 9)
     P = np.vstack([section_points(meshes, z0) for z0 in zs])
     ang = np.arctan2(P[:, 1], P[:, 0])
     rad = np.hypot(P[:, 0], P[:, 1])

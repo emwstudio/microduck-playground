@@ -1,0 +1,745 @@
+{
+  "static": [
+    {
+      "body": "trunk_base",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "collar_d_mm": 5.38,
+      "screw_d_mm": 9.07
+    },
+    {
+      "body": "trunk_base",
+      "mesh": "right_shell",
+      "collar_d_mm": 0.44,
+      "screw_d_mm": 40.96
+    },
+    {
+      "body": "trunk_base",
+      "mesh": "banana_pcb_locker",
+      "collar_d_mm": 5.99,
+      "screw_d_mm": 23.29
+    },
+    {
+      "body": "trunk_base",
+      "mesh": "trunk_base",
+      "collar_d_mm": 9.88,
+      "screw_d_mm": 18.0
+    },
+    {
+      "body": "trunk_base",
+      "mesh": "xl330",
+      "collar_d_mm": 5.06,
+      "screw_d_mm": 11.8
+    },
+    {
+      "body": "trunk_base",
+      "mesh": "power_support",
+      "collar_d_mm": 4.62,
+      "screw_d_mm": 15.46
+    },
+    {
+      "body": "trunk_base",
+      "mesh": "power_support",
+      "collar_d_mm": 4.62,
+      "screw_d_mm": 15.46
+    },
+    {
+      "body": "trunk_base",
+      "mesh": "np_f970",
+      "collar_d_mm": 3.32,
+      "screw_d_mm": 22.86
+    },
+    {
+      "body": "trunk_base",
+      "mesh": "np_f970",
+      "collar_d_mm": 3.32,
+      "screw_d_mm": 22.86
+    },
+    {
+      "body": "trunk_base",
+      "mesh": "xl330",
+      "collar_d_mm": 5.12,
+      "screw_d_mm": 46.77
+    },
+    {
+      "body": "trunk_base",
+      "mesh": "left_shell",
+      "collar_d_mm": 0.54,
+      "screw_d_mm": 0.38
+    },
+    {
+      "body": "trunk_base",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "collar_d_mm": 5.32,
+      "screw_d_mm": 31.82
+    },
+    {
+      "body": "yaw2roll",
+      "mesh": "yaw2roll",
+      "collar_d_mm": 1.32,
+      "screw_d_mm": 10.92
+    },
+    {
+      "body": "yaw2roll",
+      "mesh": "xl330",
+      "collar_d_mm": 17.48,
+      "screw_d_mm": 25.54
+    },
+    {
+      "body": "yaw2roll",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "collar_d_mm": 4.79,
+      "screw_d_mm": 10.1
+    },
+    {
+      "body": "yaw2roll",
+      "mesh": "bearing_roll",
+      "collar_d_mm": 9.37,
+      "screw_d_mm": 17.22
+    },
+    {
+      "body": "hip_l",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "collar_d_mm": 6.27,
+      "screw_d_mm": 8.74
+    },
+    {
+      "body": "hip_l",
+      "mesh": "hip_l",
+      "collar_d_mm": 6.09,
+      "screw_d_mm": 10.18
+    },
+    {
+      "body": "hip_l",
+      "mesh": "hip_l",
+      "collar_d_mm": 6.09,
+      "screw_d_mm": 10.18
+    },
+    {
+      "body": "upper_leg_left",
+      "mesh": "upper_leg_left",
+      "collar_d_mm": 7.84,
+      "screw_d_mm": 6.25
+    },
+    {
+      "body": "upper_leg_left",
+      "mesh": "xl330",
+      "collar_d_mm": 24.4,
+      "screw_d_mm": 29.37
+    },
+    {
+      "body": "upper_leg_left",
+      "mesh": "upper_leg_rigidity_plate",
+      "collar_d_mm": 14.89,
+      "screw_d_mm": 19.44
+    },
+    {
+      "body": "upper_leg_left",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "collar_d_mm": 27.03,
+      "screw_d_mm": 30.6
+    },
+    {
+      "body": "upper_leg_left",
+      "mesh": "xl330",
+      "collar_d_mm": 17.49,
+      "screw_d_mm": 20.39
+    },
+    {
+      "body": "leg",
+      "mesh": "leg",
+      "collar_d_mm": 33.27,
+      "screw_d_mm": 38.52
+    },
+    {
+      "body": "leg",
+      "mesh": "leg",
+      "collar_d_mm": 33.27,
+      "screw_d_mm": 38.52
+    },
+    {
+      "body": "leg",
+      "mesh": "xl330",
+      "collar_d_mm": 58.79,
+      "screw_d_mm": 65.18
+    },
+    {
+      "body": "ankle_left",
+      "mesh": "sole_left",
+      "collar_d_mm": 101.99,
+      "screw_d_mm": 106.47
+    },
+    {
+      "body": "ankle_left",
+      "mesh": "sole_left",
+      "collar_d_mm": 101.99,
+      "screw_d_mm": 106.47
+    },
+    {
+      "body": "ankle_left",
+      "mesh": "foot_left",
+      "collar_d_mm": 89.84,
+      "screw_d_mm": 94.02
+    },
+    {
+      "body": "ankle_left",
+      "mesh": "seeed_bearing__configuration_default",
+      "collar_d_mm": 46.59,
+      "screw_d_mm": 53.25
+    },
+    {
+      "body": "ankle_left",
+      "mesh": "ankle_left",
+      "collar_d_mm": 81.33,
+      "screw_d_mm": 87.55
+    },
+    {
+      "body": "neck",
+      "mesh": "neck",
+      "collar_d_mm": 15.19,
+      "screw_d_mm": 48.83
+    },
+    {
+      "body": "neck",
+      "mesh": "xl330",
+      "collar_d_mm": 0.84,
+      "screw_d_mm": 28.1
+    },
+    {
+      "body": "neck",
+      "mesh": "xl330",
+      "collar_d_mm": 27.86,
+      "screw_d_mm": 49.27
+    },
+    {
+      "body": "neck",
+      "mesh": "neck",
+      "collar_d_mm": 13.42,
+      "screw_d_mm": 29.41
+    },
+    {
+      "body": "neck_pitch",
+      "mesh": "neck_pitch",
+      "collar_d_mm": 46.01,
+      "screw_d_mm": 54.88
+    },
+    {
+      "body": "neck_pitch",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "collar_d_mm": 69.16,
+      "screw_d_mm": 77.7
+    },
+    {
+      "body": "yaw_roll_motion",
+      "mesh": "yaw_roll_motion",
+      "collar_d_mm": 70.3,
+      "screw_d_mm": 86.97
+    },
+    {
+      "body": "yaw_roll_motion",
+      "mesh": "xl330",
+      "collar_d_mm": 76.35,
+      "screw_d_mm": 89.81
+    },
+    {
+      "body": "yaw_roll_motion",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "collar_d_mm": 71.92,
+      "screw_d_mm": 77.74
+    },
+    {
+      "body": "yaw_roll_motion",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "collar_d_mm": 68.61,
+      "screw_d_mm": 81.92
+    },
+    {
+      "body": "jaw_soft",
+      "mesh": "lens",
+      "collar_d_mm": 61.5,
+      "screw_d_mm": 79.98
+    },
+    {
+      "body": "jaw_soft",
+      "mesh": "face_part",
+      "collar_d_mm": 90.97,
+      "screw_d_mm": 111.6
+    },
+    {
+      "body": "jaw_soft",
+      "mesh": "xl330",
+      "collar_d_mm": 84.02,
+      "screw_d_mm": 90.13
+    },
+    {
+      "body": "jaw_soft",
+      "mesh": "jaw_soft",
+      "collar_d_mm": 75.58,
+      "screw_d_mm": 91.1
+    },
+    {
+      "body": "jaw_soft",
+      "mesh": "motor_support",
+      "collar_d_mm": 86.26,
+      "screw_d_mm": 93.14
+    },
+    {
+      "body": "jaw_soft",
+      "mesh": "top_head_shell",
+      "collar_d_mm": 88.12,
+      "screw_d_mm": 92.12
+    },
+    {
+      "body": "jaw_soft",
+      "mesh": "top_head_shell",
+      "collar_d_mm": 88.12,
+      "screw_d_mm": 92.12
+    },
+    {
+      "body": "jaw_soft",
+      "mesh": "xl330",
+      "collar_d_mm": 83.11,
+      "screw_d_mm": 92.59
+    },
+    {
+      "body": "jaw_soft",
+      "mesh": "seeed_bearing__configuration_default",
+      "collar_d_mm": 51.92,
+      "screw_d_mm": 96.15
+    },
+    {
+      "body": "jaw_soft",
+      "mesh": "elec_rpi_robot_hat_pcb",
+      "collar_d_mm": 67.76,
+      "screw_d_mm": 90.54
+    },
+    {
+      "body": "jaw_soft",
+      "mesh": "soft_mouth_top",
+      "collar_d_mm": 75.08,
+      "screw_d_mm": 96.57
+    },
+    {
+      "body": "jaw_soft",
+      "mesh": "noenoeil",
+      "collar_d_mm": 95.05,
+      "screw_d_mm": 122.55
+    },
+    {
+      "body": "jaw_soft",
+      "mesh": "jaw",
+      "collar_d_mm": 73.91,
+      "screw_d_mm": 82.53
+    },
+    {
+      "body": "jaw_soft",
+      "mesh": "jaw",
+      "collar_d_mm": 73.91,
+      "screw_d_mm": 82.53
+    },
+    {
+      "body": "jaw_soft",
+      "mesh": "bottom_head_shell",
+      "collar_d_mm": 71.06,
+      "screw_d_mm": 79.94
+    },
+    {
+      "body": "jaw_soft",
+      "mesh": "bottom_head_shell",
+      "collar_d_mm": 71.06,
+      "screw_d_mm": 79.94
+    },
+    {
+      "body": "jaw_soft",
+      "mesh": "m12_lens_holder",
+      "collar_d_mm": 94.4,
+      "screw_d_mm": 109.68
+    },
+    {
+      "body": "jaw_soft",
+      "mesh": "pcb__raspberry_pi_zero_2_w",
+      "collar_d_mm": 86.68,
+      "screw_d_mm": 108.4
+    },
+    {
+      "body": "jaw_soft",
+      "mesh": "speaker",
+      "collar_d_mm": 99.54,
+      "screw_d_mm": 109.27
+    },
+    {
+      "body": "bearing_roll",
+      "mesh": "yaw2roll",
+      "collar_d_mm": 2.38,
+      "screw_d_mm": 39.81
+    },
+    {
+      "body": "bearing_roll",
+      "mesh": "xl330",
+      "collar_d_mm": 17.48,
+      "screw_d_mm": 51.96
+    },
+    {
+      "body": "bearing_roll",
+      "mesh": "bearing_roll",
+      "collar_d_mm": 9.66,
+      "screw_d_mm": 44.82
+    },
+    {
+      "body": "bearing_roll",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "collar_d_mm": 5.05,
+      "screw_d_mm": 33.97
+    },
+    {
+      "body": "hip_l_2",
+      "mesh": "hip_l",
+      "collar_d_mm": 12.65,
+      "screw_d_mm": 43.24
+    },
+    {
+      "body": "hip_l_2",
+      "mesh": "hip_l",
+      "collar_d_mm": 12.65,
+      "screw_d_mm": 43.24
+    },
+    {
+      "body": "hip_l_2",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "collar_d_mm": 4.97,
+      "screw_d_mm": 74.36
+    },
+    {
+      "body": "upper_leg_right",
+      "mesh": "xl330",
+      "collar_d_mm": 24.44,
+      "screw_d_mm": 88.45
+    },
+    {
+      "body": "upper_leg_right",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "collar_d_mm": 26.79,
+      "screw_d_mm": 81.08
+    },
+    {
+      "body": "upper_leg_right",
+      "mesh": "upper_leg_rigidity_plate",
+      "collar_d_mm": 14.94,
+      "screw_d_mm": 84.41
+    },
+    {
+      "body": "upper_leg_right",
+      "mesh": "upper_leg_right",
+      "collar_d_mm": 11.78,
+      "screw_d_mm": 83.81
+    },
+    {
+      "body": "upper_leg_right",
+      "mesh": "xl330",
+      "collar_d_mm": 17.49,
+      "screw_d_mm": 83.73
+    },
+    {
+      "body": "leg_2",
+      "mesh": "xl330",
+      "collar_d_mm": 58.79,
+      "screw_d_mm": 104.42
+    },
+    {
+      "body": "leg_2",
+      "mesh": "leg",
+      "collar_d_mm": 33.25,
+      "screw_d_mm": 85.58
+    },
+    {
+      "body": "leg_2",
+      "mesh": "leg",
+      "collar_d_mm": 33.25,
+      "screw_d_mm": 85.58
+    },
+    {
+      "body": "ankle_right",
+      "mesh": "ankle_right",
+      "collar_d_mm": 81.32,
+      "screw_d_mm": 114.06
+    },
+    {
+      "body": "ankle_right",
+      "mesh": "sole_right",
+      "collar_d_mm": 99.05,
+      "screw_d_mm": 128.33
+    },
+    {
+      "body": "ankle_right",
+      "mesh": "sole_right",
+      "collar_d_mm": 99.05,
+      "screw_d_mm": 128.33
+    },
+    {
+      "body": "ankle_right",
+      "mesh": "seeed_bearing__configuration_default",
+      "collar_d_mm": 46.62,
+      "screw_d_mm": 90.48
+    },
+    {
+      "body": "ankle_right",
+      "mesh": "foot_right",
+      "collar_d_mm": 91.86,
+      "screw_d_mm": 112.17
+    }
+  ],
+  "swing": [
+    {
+      "joint": "left_hip_roll",
+      "q": 0.256,
+      "body": "hip_l",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "d_mm": 0.17
+    },
+    {
+      "joint": "left_hip_roll",
+      "q": 0.32,
+      "body": "hip_l",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "d_mm": 0.34
+    },
+    {
+      "joint": "left_hip_roll",
+      "q": 0.32,
+      "body": "hip_l",
+      "mesh": "hip_l",
+      "d_mm": 0.4
+    },
+    {
+      "joint": "left_hip_roll",
+      "q": 0.32,
+      "body": "hip_l",
+      "mesh": "hip_l",
+      "d_mm": 0.4
+    },
+    {
+      "joint": "left_hip_roll",
+      "q": 0.384,
+      "body": "hip_l",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "d_mm": 0.19
+    },
+    {
+      "joint": "left_hip_pitch",
+      "q": 0.785,
+      "body": "upper_leg_left",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "d_mm": 0.33
+    },
+    {
+      "joint": "left_hip_pitch",
+      "q": 0.785,
+      "body": "leg",
+      "mesh": "leg",
+      "d_mm": 0.46
+    },
+    {
+      "joint": "left_hip_pitch",
+      "q": 0.785,
+      "body": "leg",
+      "mesh": "leg",
+      "d_mm": 0.46
+    },
+    {
+      "joint": "left_hip_pitch",
+      "q": 1.047,
+      "body": "upper_leg_left",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "d_mm": 0.14
+    },
+    {
+      "joint": "left_hip_pitch",
+      "q": 1.047,
+      "body": "leg",
+      "mesh": "leg",
+      "d_mm": 0.24
+    },
+    {
+      "joint": "left_hip_pitch",
+      "q": 1.047,
+      "body": "leg",
+      "mesh": "leg",
+      "d_mm": 0.24
+    },
+    {
+      "joint": "left_hip_pitch",
+      "q": 1.309,
+      "body": "upper_leg_left",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "d_mm": 0.18
+    },
+    {
+      "joint": "left_hip_pitch",
+      "q": 1.309,
+      "body": "leg",
+      "mesh": "leg",
+      "d_mm": 0.18
+    },
+    {
+      "joint": "left_hip_pitch",
+      "q": 1.309,
+      "body": "leg",
+      "mesh": "leg",
+      "d_mm": 0.18
+    },
+    {
+      "joint": "left_hip_pitch",
+      "q": 1.309,
+      "body": "ankle_left",
+      "mesh": "seeed_bearing__configuration_default",
+      "d_mm": 0.44
+    },
+    {
+      "joint": "left_hip_pitch",
+      "q": 1.571,
+      "body": "upper_leg_left",
+      "mesh": "xl330",
+      "d_mm": 0.43
+    },
+    {
+      "joint": "left_hip_pitch",
+      "q": 1.571,
+      "body": "upper_leg_left",
+      "mesh": "upper_leg_rigidity_plate",
+      "d_mm": 0.33
+    },
+    {
+      "joint": "left_hip_pitch",
+      "q": 1.571,
+      "body": "upper_leg_left",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "d_mm": 0.15
+    },
+    {
+      "joint": "left_hip_pitch",
+      "q": 1.571,
+      "body": "leg",
+      "mesh": "leg",
+      "d_mm": 0.13
+    },
+    {
+      "joint": "left_hip_pitch",
+      "q": 1.571,
+      "body": "leg",
+      "mesh": "leg",
+      "d_mm": 0.13
+    },
+    {
+      "joint": "left_hip_pitch",
+      "q": 1.571,
+      "body": "ankle_left",
+      "mesh": "seeed_bearing__configuration_default",
+      "d_mm": 0.09
+    },
+    {
+      "joint": "left_knee",
+      "q": 1.571,
+      "body": "ankle_left",
+      "mesh": "foot_left",
+      "d_mm": 0.33
+    },
+    {
+      "joint": "right_hip_roll",
+      "q": -0.384,
+      "body": "hip_l_2",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "d_mm": 0.2
+    },
+    {
+      "joint": "right_hip_roll",
+      "q": -0.32,
+      "body": "hip_l_2",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "d_mm": 0.15
+    },
+    {
+      "joint": "right_hip_roll",
+      "q": -0.256,
+      "body": "hip_l_2",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "d_mm": 0.19
+    },
+    {
+      "joint": "right_hip_pitch",
+      "q": -1.571,
+      "body": "upper_leg_right",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "d_mm": 0.32
+    },
+    {
+      "joint": "right_hip_pitch",
+      "q": -1.571,
+      "body": "leg_2",
+      "mesh": "leg",
+      "d_mm": 0.25
+    },
+    {
+      "joint": "right_hip_pitch",
+      "q": -1.571,
+      "body": "leg_2",
+      "mesh": "leg",
+      "d_mm": 0.25
+    },
+    {
+      "joint": "right_hip_pitch",
+      "q": -1.571,
+      "body": "ankle_right",
+      "mesh": "seeed_bearing__configuration_default",
+      "d_mm": 0.08
+    },
+    {
+      "joint": "right_hip_pitch",
+      "q": -1.309,
+      "body": "upper_leg_right",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "d_mm": 0.15
+    },
+    {
+      "joint": "right_hip_pitch",
+      "q": -1.309,
+      "body": "leg_2",
+      "mesh": "leg",
+      "d_mm": 0.11
+    },
+    {
+      "joint": "right_hip_pitch",
+      "q": -1.309,
+      "body": "leg_2",
+      "mesh": "leg",
+      "d_mm": 0.11
+    },
+    {
+      "joint": "right_hip_pitch",
+      "q": -1.047,
+      "body": "upper_leg_right",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "d_mm": 0.3
+    },
+    {
+      "joint": "right_hip_pitch",
+      "q": -1.047,
+      "body": "leg_2",
+      "mesh": "leg",
+      "d_mm": 0.31
+    },
+    {
+      "joint": "right_hip_pitch",
+      "q": -1.047,
+      "body": "leg_2",
+      "mesh": "leg",
+      "d_mm": 0.31
+    },
+    {
+      "joint": "right_hip_pitch",
+      "q": -0.785,
+      "body": "upper_leg_right",
+      "mesh": "seeed_bearing__configuration__22x16x4",
+      "d_mm": 0.35
+    }
+  ],
+  "band_fit": {}
+}

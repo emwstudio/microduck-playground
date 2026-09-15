@@ -32,7 +32,7 @@ import trimesh
 # Torso cross-section measured from robot_allcollisions.xml by
 # measure_torso_contour.py (triangle sections through every trunk mesh):
 # front r=22.8 mm, back r=46 mm, sides r=32 mm at band height.
-Z_C = 0.018                         # band centre height — mid purple shell (z 0.0003..0.042)
+Z_C = 0.016                         # band centre height — mid purple shell, clear of the neck servo
 BAND_H, BAND_T = 0.014, 0.0022     # band cross-section: vertical × radial
 ALLOW = 0.0012                      # clamping allowance: band inner face = shell + this
 GAP_HALF = 0.18                     # split half-angle at the +y side (~12 mm gap)
@@ -41,14 +41,17 @@ CONTOUR_JSON = Path(__file__).resolve().parent.parent / "torso_contour.json"
 
 
 def _shell_radius() -> tuple[np.ndarray, np.ndarray]:
-    """Measured polar shell contour, y-symmetrized and lightly smoothed."""
+    """Measured polar shell contour, y-symmetrized, rolling-MAX smoothed
+    (never shrinks below the measured envelope — a mean filter once dipped
+    the band into the shell, 0.24 mm graze)."""
+    from scipy.ndimage import maximum_filter1d
     data = json.loads(CONTOUR_JSON.read_text())
     ang = np.array(data["angle"])
     r = np.array([np.nan if v is None else v for v in data["r"]])
     ok = ~np.isnan(r)
     r = np.interp(ang, ang[ok], r[ok])                 # fill gaps
     r = np.maximum(r, r[::-1])                         # symmetrize left/right
-    r = np.convolve(np.r_[r[-1], r, r[0]], np.ones(3) / 3, mode="same")[1:-1]
+    r = maximum_filter1d(r, size=3, mode="wrap")       # smooth without shrinking
     return ang, r
 
 
