@@ -30,7 +30,7 @@ import trimesh
 XF, XB, HW = 0.034, 0.048, 0.049   # band centreline: front / back / side reach
 Z_C = -0.004                        # band centre height — above the hip-shell bulge so the clamp reads on camera
 BAND_H, BAND_T = 0.014, 0.0022     # band cross-section: vertical × radial
-GAP_HALF = 0.60                     # split half-angle at the +y side (~50 mm gap — reads on video)
+GAP_HALF = 0.34                     # split half-angle at the +y side (~28 mm gap, ~22 mm between lug faces)
 
 # --- clamp hardware ---
 LUG_W, LUG_OUT, LUG_H = 0.006, 0.010, 0.012   # ~48 mm between the lug faces: big screw travel, reads on video
