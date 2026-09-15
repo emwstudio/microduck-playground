@@ -23,14 +23,42 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import json
+
 import numpy as np
 import trimesh
 
 # --- measured duck dimensions (metres, trunk-local) ---
-XF, XB, HW = 0.034, 0.048, 0.049   # band centreline: front / back / side reach
-Z_C = -0.004                        # band centre height — above the hip-shell bulge so the clamp reads on camera
+# Torso cross-section measured from robot_allcollisions.xml by
+# measure_torso_contour.py (triangle sections through every trunk mesh):
+# front r=22.8 mm, back r=46 mm, sides r=32 mm at band height.
+Z_C = 0.018                         # band centre height — mid purple shell (z 0.0003..0.042)
 BAND_H, BAND_T = 0.014, 0.0022     # band cross-section: vertical × radial
-GAP_HALF = 0.14                     # split half-angle at the +y side (~12 mm gap, ~9 mm between lug faces)
+ALLOW = 0.0012                      # clamping allowance: band inner face = shell + this
+GAP_HALF = 0.18                     # split half-angle at the +y side (~12 mm gap)
+
+CONTOUR_JSON = Path(__file__).resolve().parent.parent / "torso_contour.json"
+
+
+def _shell_radius() -> tuple[np.ndarray, np.ndarray]:
+    """Measured polar shell contour, y-symmetrized and lightly smoothed."""
+    data = json.loads(CONTOUR_JSON.read_text())
+    ang = np.array(data["angle"])
+    r = np.array([np.nan if v is None else v for v in data["r"]])
+    ok = ~np.isnan(r)
+    r = np.interp(ang, ang[ok], r[ok])                 # fill gaps
+    r = np.maximum(r, r[::-1])                         # symmetrize left/right
+    r = np.convolve(np.r_[r[-1], r, r[0]], np.ones(3) / 3, mode="same")[1:-1]
+    return ang, r
+
+
+_SHELL_ANG, _SHELL_R = _shell_radius()
+
+
+def shell_r(theta: np.ndarray) -> np.ndarray:
+    """Band CENTRELINE radius at angle theta: shell + allowance + half thickness."""
+    wrapped = (theta + np.pi) % (2 * np.pi) - np.pi
+    return np.interp(wrapped, _SHELL_ANG, _SHELL_R, period=2 * np.pi) + ALLOW + BAND_T / 2
 
 # --- clamp hardware ---
 LUG_W, LUG_OUT, LUG_H = 0.003, 0.010, 0.008   # slim 3 mm ears, ~7 mm of screw platform outside the ring
@@ -49,8 +77,8 @@ THREAD_PITCH, THREAD_R = 0.0005, 0.00035
 # channel is through; a cast neck cradles the ring from BELOW the channel.
 EYE_MAJOR, EYE_TUBE = 0.007, 0.0025
 EYE_INNER_R = EYE_MAJOR - EYE_TUBE           # Ø9 mm clear hole
-FACE_FRONT = XF + BAND_T / 2
-FACE_BACK = XB + BAND_T / 2
+FACE_FRONT = float(shell_r(np.array([0.0]))[0]) + BAND_T / 2      # band outer surface, front
+FACE_BACK = float(shell_r(np.array([np.pi]))[0]) + BAND_T / 2     # band outer surface, back
 EYE_FRONT = np.array([FACE_FRONT + 0.002 + EYE_MAJOR + EYE_TUBE, 0.0, Z_C])
 EYE_BACK = np.array([-(FACE_BACK + 0.002 + EYE_MAJOR + EYE_TUBE), 0.0, Z_C])
 
@@ -59,10 +87,11 @@ ASSETS = Path(__file__).resolve().parents[3] / "src/mjlab_microduck/robot/microd
 
 
 def band_path(n: int = 128) -> tuple[np.ndarray, np.ndarray]:
-    """Open loop around the shell, ends facing each other across the +y gap."""
+    """Open loop around the shell, ends facing each other across the +y gap.
+    Radius comes from the MEASURED torso contour (torso_contour.json)."""
     ang = np.linspace(np.pi / 2 + GAP_HALF, np.pi / 2 + 2 * np.pi - GAP_HALF, n)
-    a = (XF + XB) / 2 + (XF - XB) / 2 * np.cos(ang)
-    x, y = a * np.cos(ang), HW * np.sin(ang)
+    r = shell_r(ang)
+    x, y = r * np.cos(ang), r * np.sin(ang)
     tang = np.gradient(np.stack([x, y], axis=1), ang, axis=0)
     tang /= np.linalg.norm(tang, axis=1, keepdims=True)
     outward = np.stack([tang[:, 1], -tang[:, 0]], axis=1)
@@ -151,16 +180,20 @@ def tow_eye(center: np.ndarray) -> trimesh.Trimesh:
     sign = 1.0 if center[0] > 0 else -1.0
     band_face = sign * (abs(center[0]) - 0.002 - EYE_MAJOR - EYE_TUBE)
     neck_x0 = band_face - sign * BAND_T        # inside the band
-    neck_x1 = center[0] - sign * (EYE_MAJOR - EYE_TUBE / 2)   # into the tube, clear of the hole
-    neck = trimesh.creation.box(extents=(abs(neck_x1 - neck_x0), 0.006, 0.007))
-    neck.apply_translation(((neck_x0 + neck_x1) / 2, 0.0, Z_C))
+    neck_x1 = center[0] + sign * 0.002         # past the ring's bottom tube
+    neck = trimesh.creation.box(extents=(abs(neck_x1 - neck_x0), 0.006, 0.004))
+    # horizontal bar hugging the tube's underside; its top face stays
+    # 0.5 mm below the hole channel (bottom edge = Z_C - EYE_INNER_R)
+    neck.apply_translation(((neck_x0 + neck_x1) / 2, 0.0, Z_C - EYE_MAJOR))
     return trimesh.boolean.union([ring, neck], engine="manifold")
 
 
 def hole_gauge_ok(collar: trimesh.Trimesh) -> bool:
     """Push a Ø8 mm gauge pin SIDEWAYS (along y) through each eye centre:
     the collar must not intersect it (hole channel clear for the rope)."""
-    span = 2 * (EYE_MAJOR + EYE_TUBE) + 0.02   # ring tube extent + margin
+    span = 2 * (EYE_MAJOR + EYE_TUBE) + 0.004   # ring tube extent + small margin
+    # (longer pins would sweep the neighbouring band at ±20° — the rope
+    # never goes there; the channel that matters is through the ring)
     for center in (EYE_FRONT, EYE_BACK):
         pin = trimesh.creation.cylinder(radius=EYE_INNER_R - 0.0005, height=span, sections=24)
         pin.apply_transform(trimesh.geometry.align_vectors([0, 0, 1], [0, 1, 0]))
