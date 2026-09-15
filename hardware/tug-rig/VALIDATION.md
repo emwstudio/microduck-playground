@@ -43,11 +43,12 @@ the **M3 socket-head cap screw** (Ø3.2 mm holes, 2.5 mm hex socket,
 M3×0.5 thread, black-oxide in sim) bridges the lugs ~6 mm OUTSIDE the
 ring's outer surface, so the hex key tightens it with zero obstruction
 from the ring. Tightening pulls the lug arms together and clamps the band
-onto the shell by friction. The tow eyes are D-ring style: ring plane
-VERTICAL and fore-aft (rope threads from the side, pull stays in the
-ring's plane), **fused to the band by cast neck bosses** — the collar STL
-is verified as ONE connected shell (`connected_bodies == 1` at
-generation). Each eye has a **clear Ø9 mm hole** (Ø4 mm rope passes
+onto the shell by friction. The tow eyes are one-piece pad-eye PLATES
+(5 mm thick, lollipop profile: rectangular stem flaring into a circular
+head around the hole, shoulders filleted — ring and boss read as one cast
+part), plane VERTICAL and fore-aft (rope threads from the side, pull
+stays in the eye's plane), fused into the band — the collar STL is
+verified as ONE connected shell (`connected_bodies == 1` at generation). Each eye has a **clear Ø9 mm hole** (Ø4 mm rope passes
 doubled for a lark's head; Ø6 mm single for a bowline) — the generator
 pushes a Ø8 mm gauge pin sideways through each eye and asserts the
 channel is unobstructed:
