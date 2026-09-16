@@ -412,10 +412,10 @@ def _knot_path() -> np.ndarray:
         rot = np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
         return (pts - eye_c) @ rot.T + eye_c
 
-    def loop(cx: float, a: float, b: float, th: float, dy: float = 0.0) -> np.ndarray:
-        # dy: shift the coil toward the match camera (+y maps to world +y
-        # through the mocap solve) so the lump rides proud of the eye
-        # instead of sinking behind the plate's near face.
+    def loop(cx: float, a: float, b: float, th: float, dy: float = -0.002) -> np.ndarray:
+        # dy: sink the coil INTO the eye's passage (away from the camera)
+        # and cx deeper toward the hole centre — the knot reads as tied
+        # INTO the hole, gripping the bar from inside.
         t = np.linspace(0.0, 2.0 * np.pi, 33)[:-1]   # periodic, no duplicate
         pts = np.stack([cx + a * np.cos(t), dy + b * np.sin(t),
                         np.zeros_like(t)], axis=1)
@@ -423,7 +423,7 @@ def _knot_path() -> np.ndarray:
 
     segs = [np.array([[0.0070, 0.0, 0.0], [0.0050, 0.0, 0.0], [0.0035, 0.0, 0.0]])]
     for th in (-0.75, 0.0, 0.75):
-        segs.append(loop(-0.0030, 0.0045, 0.0040, th))
+        segs.append(loop(-0.0040, 0.0045, 0.0040, th))
     segs.append(np.array([[-0.0010, 0.0, -0.003], [-0.0020, -0.001, -0.005]]))
     return np.vstack(segs)
 
