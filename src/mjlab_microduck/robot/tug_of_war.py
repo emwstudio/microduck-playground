@@ -254,9 +254,12 @@ def _add_rig_materials(spec: mujoco.MjSpec) -> None:
     orange.specular = 0.85
     orange.shininess = 0.6
     knot = spec.add_material(name="tug_knot")
-    knot.rgba = (0.83, 0.74, 0.55, 1.0)   # rope-average gold — reads continuous with the span
-    knot.specular = 0.3
-    knot.shininess = 0.3
+    knot.rgba = (0.78, 0.69, 0.50, 1.0)   # matte hemp — matches the rope's
+                                          # average tone WITHOUT the white
+                                          # specular the smooth CAD solid
+                                          # used to throw (渲染发白)
+    knot.specular = 0.08
+    knot.shininess = 0.15
 
 
 def _load_hook_stls(spec: mujoco.MjSpec) -> None:
