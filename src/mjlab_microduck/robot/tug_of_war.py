@@ -374,17 +374,18 @@ KNOT_MAJOR = 0.0045      # rope coil cinching the eye's rim on the pull side (la
 
 
 def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
-    """Lark's-head bight on the eye's near rim: ONE clean loop of rope in
-    the xy plane wrapping the rim section — inner strand threads the hole
-    along y (out one face, back the other), outer strand wraps the plate's
-    outside. The span rope ends into the loop. No coil blob — the two
-    strands through the tunnel must READ as rope in the hole.
+    """The tie at each eye: a 2.5-turn rope coil wound around the rim bar
+    on the pull side AND around the span rope's end (the standing part is
+    cinched against the bar, the working end disappears into the coil —
+    exactly how a short rope gets knotted onto a ring).
     """
-    t = np.linspace(0.0, 2.0 * np.pi, 41)
-    a, b = 0.007, 0.0075
-    loop_pts = np.stack([a * np.cos(t), b * np.sin(t), np.zeros_like(t)], axis=1)
-    verts, normals, uvs, faces = _sweep_smooth(loop_pts)
-    uvs[:, 0] *= (2 * np.pi * a) / (3.5 * 2.0 * SPAN_RADIUS)
+    turns, pitch = 2.5, 0.0035
+    t = np.linspace(0.0, 2.0 * np.pi * turns, 64)
+    coil_pts = np.stack([KNOT_MAJOR * np.cos(t),
+                         (t / (2 * np.pi * turns) - 0.5) * turns * pitch,
+                         KNOT_MAJOR * np.sin(t)], axis=1)
+    verts, normals, uvs, faces = _sweep_smooth(coil_pts)
+    uvs[:, 0] *= (turns * 2.0 * np.pi * KNOT_MAJOR) / (3.5 * 2.0 * SPAN_RADIUS)
     mesh = spec.add_mesh(name=name)
     mesh.uservert = verts.flatten().astype(np.float32)
     mesh.usernormal = normals.flatten().astype(np.float32)
@@ -584,10 +585,10 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         chord = float(np.linalg.norm(chord_vec))
         if chord < 1e-6:
             continue
-        # The rope's tip ends inside the bight loop, 3 mm PAST the knot
-        # centre toward the eye (still in the Ø11 hole's void, clear of
-        # the rim) — the loop wraps the rope's end, no gap, no free tip.
-        back = EYE_RING_MAJOR - 0.003
+        # The rope's end disappears INTO the wound coil on the rim (pull
+        # each end back from the site by EYE_MAJOR so the tip tucks into
+        # the knot, never sticking out past it).
+        back = EYE_RING_MAJOR
         chord_vec /= chord
         e0 = p0 + chord_vec * back
         e1 = p1 - chord_vec * back
