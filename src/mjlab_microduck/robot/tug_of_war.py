@@ -253,6 +253,10 @@ def _add_rig_materials(spec: mujoco.MjSpec) -> None:
     orange.rgba = (0.92, 0.42, 0.08, 1.0)   # anodized-orange carabiner
     orange.specular = 0.85
     orange.shininess = 0.6
+    knot = spec.add_material(name="tug_knot")
+    knot.rgba = (0.83, 0.74, 0.55, 1.0)   # rope-average gold — reads continuous with the span
+    knot.specular = 0.3
+    knot.shininess = 0.3
 
 
 def _load_hook_stls(spec: mujoco.MjSpec) -> None:
@@ -400,7 +404,7 @@ def _add_knots(spec: mujoco.MjSpec, knot_use: list[tuple[str, str, float]], red:
             type=mujoco.mjtGeom.mjGEOM_MESH,
             meshname="tug_knot",
             pos=(eye[0] + sign * EYE_RING_MAJOR, 0.0, eye[2]),
-            material="tug_twist",
+            material="tug_knot",
             contype=0,
             conaffinity=0,
             density=0.0,
