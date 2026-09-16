@@ -127,7 +127,8 @@ def test_hemp_visuals_span_the_chain(tug_model) -> None:
     n_variants = sum(
         1 for i in range(tug_model.nmesh)
         if (mujoco.mj_id2name(tug_model, mujoco.mjtObj.mjOBJ_MESH, i) or "").startswith("tug_var_"))
-    assert n_variants == 11 * 4
+    from mjlab_microduck.robot.tug_of_war import CHORD_BINS, SAG_BINS
+    assert n_variants == len(CHORD_BINS) * len(SAG_BINS)
     spans = resolve_rope_visuals(tug_model, 5)
     assert len(spans) == 9
     assert all(span.body_id >= 0 and span.geom_id >= 0 for span in spans)
