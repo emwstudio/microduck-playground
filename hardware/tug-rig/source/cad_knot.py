@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Prusik-style ring knot for the tug rope (trimesh/manifold pipeline).
+
+Per the user's hand sketch (IMG_3701): the rope wraps ONE full turn around
+the ring's bar (the bight captures the ring), the tail runs back PARALLEL
+to the standing rope (two clean legs), then coils twice around it. The
+standing stub (x 4..14 mm) is Ø5.2 so the sim rope (Ø5) slides INTO it —
+the rope tip hides inside the solid, no junction seam.
+
+Knot frame (mm): rim point at origin, ring centre at (-8, 0, 0), standing
+rope along +x, ring plate in the xz plane (hole axis = y).
+Outputs: meshes/tug_knot_mm.stl + metre copies (and an x-mirrored pair).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import trimesh
+
+OUT = Path(__file__).resolve().parent.parent / "meshes"
+ASSETS = (Path(__file__).resolve().parents[3]
+          / "src/mjlab_microduck/robot/microduck/assets")
+
+R = 2.6   # tube radius (mm) — Ø5.2, swallows the Ø5 rope
+
+
+def knot_path() -> np.ndarray:
+    segs = []
+    phi = np.linspace(np.pi, np.pi + 4.0 * np.pi, 25)          # tail coils
+    segs.append(np.stack([6.0 + (phi - np.pi) / (4.0 * np.pi) * 4.5,
+                          4.2 * np.cos(phi), 4.2 * np.sin(phi)], axis=1))
+    segs += [
+        np.array([[10.8, -2.0, -0.5], [11.5, -3.0, -1.0]]),
+        np.array([[10.0, -3.2, -0.5], [6.0, -3.2, -0.5],
+                  [2.5, -3.0, -1.0]]),                          # tail leg
+        np.array([[0.8, -2.8, -1.0], [-0.5, -3.8, 0.0]]),
+    ]
+    t = np.linspace(-0.5 * np.pi + 0.3, 1.5 * np.pi + 0.3, 40)  # the full turn
+    segs.append(np.stack([-1.2 + 4.8 * np.cos(t),
+                          4.5 * np.sin(t), np.zeros_like(t)], axis=1))
+    segs.append(np.array([[0.5, 3.0, 0.0], [2.0, 1.5, 0.0], [4.0, 0.0, 0.0],
+                          [7.0, 0.0, 0.0], [10.0, 0.0, 0.0], [14.0, 0.0, 0.0]]))
+    pts = np.vstack(segs)
+    # densify to ~0.8 mm steps so capsule unions are crease-free
+    dense = [pts[0]]
+    for a, b in zip(pts[:-1], pts[1:]):
+        d = float(np.linalg.norm(b - a))
+        for s in np.linspace(0.0, 1.0, max(2, int(d / 0.6)), endpoint=False)[1:]:
+            dense.append(a + s * (b - a))
+        dense.append(b)
+    return np.array(dense)
+
+
+def build() -> trimesh.Trimesh:
+    pts = knot_path()
+    parts = [trimesh.creation.capsule(radius=R, height=float(np.linalg.norm(b - a)),
+                                      count=[20, 12],
+                                      transform=trimesh.transformations
+                                      .translation_matrix((a + b) / 2.0)
+                                      @ trimesh.geometry.align_vectors(
+                                          [0, 0, 1], b - a))
+             for a, b in zip(pts[:-1], pts[1:])]
+    knot = trimesh.boolean.union(parts, engine="manifold")
+    assert knot.is_volume and knot.is_watertight, "knot must be one solid"
+    return knot
+
+
+def export_both(mesh: trimesh.Trimesh, name: str) -> None:
+    OUT.mkdir(parents=True, exist_ok=True)
+    ASSETS.mkdir(parents=True, exist_ok=True)
+    mesh.export(OUT / f"{name}_mm.stl")
+    m = mesh.copy()
+    m.apply_scale(0.001)
+    m.export(ASSETS / f"{name}.stl")
+    m.export(OUT / f"{name}_m.stl")
+
+
+def main() -> None:
+    knot = build()
+    export_both(knot, "tug_knot")
+    mir = knot.copy()
+    mir.apply_transform(np.diag([-1.0, 1.0, 1.0, 1.0]))
+    mir.invert()   # mirror flips winding — restore outward normals
+    export_both(mir, "tug_knot_mir")
+    print("knot:", knot.extents.round(2), "mm, watertight:", knot.is_watertight)
+
+
+if __name__ == "__main__":
+    main()
