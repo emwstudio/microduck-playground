@@ -406,13 +406,15 @@ KNOT_MAJOR = 0.0045      # stopper-knot coil radius around the rope itself
 
 
 def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
-    """Chunky 3-turn coil wound around the eye's rim bar (knot frame: ring
-    centre at -EYE_RING_MAJOR on x, incoming span rope from +x). Each turn
-    threads the hole along y and wraps the plate's outside; successive turns
-    step around the rim arc like a real whipping. The span rope's tip dives
-    into the coil's outer arc and its end cap is swallowed whole (coil tube
-    Ø5.6 > rope Ø5) — no severed-looking tip anywhere. The coil's own free
-    end tucks into the lump's interior.
+    """Chunky coil plugging the eye (knot frame: ring centre at
+    -EYE_RING_MAJOR on x, incoming span rope from +x). THREE closed loops
+    wrap the rim bar FROM INSIDE THE HOLE (turn centres 3 mm inside, loops
+    encircle the bar and bulge out of both plate faces) — the plugged-hole
+    silhouette reads as "套在环上" from the face-on match camera. Loops are
+    CLOSED sweeps: no free ends, no joint spikes (the previous single
+    open path pinched into shards at every segment joint — 穿模). A short
+    open lead-in merges the coil into the span rope; both its caps are
+    buried (one in the coil, one swallowed with the rope tip).
     """
     eye_c = np.array([-EYE_RING_MAJOR, 0.0, 0.0])
 
@@ -422,25 +424,26 @@ def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
         return (pts - eye_c) @ rot.T + eye_c
 
     def loop(cx: float, a: float, b: float, th: float) -> np.ndarray:
-        t = np.linspace(0.0, 2.0 * np.pi, 33)
+        t = np.linspace(0.0, 2.0 * np.pi, 33)[:-1]   # periodic, no duplicate
         pts = np.stack([cx + a * np.cos(t), b * np.sin(t),
                         np.zeros_like(t)], axis=1)
         return rot_y(pts, th)
 
-    # THREE turns wrapping the bar FROM INSIDE THE HOLE: turn centres sit
-    # 3 mm inside the hole (r=5 mm from the ring centre), loops encircle the
-    # rim bar (hole-side arc r≈0.5, outer arc r≈9.5) and bulge ±4 mm out of
-    # both plate faces — the knot PLUGS the orange hole. That plugged-hole
-    # silhouette is what reads as "套在环上" from the face-on match camera
-    # (strands threading the hole run along its axis = invisible dots).
-    segs = [np.array([[0.0050, 0.0, 0.0], [0.0030, 0.0, 0.0]]),   # lead-in
-            loop(-0.0030, 0.0045, 0.0040, -0.40),
-            loop(-0.0030, 0.0045, 0.0040, 0.0),
-            loop(-0.0030, 0.0045, 0.0040, +0.40)]
-    # Tail dives into the lump interior so the free end hides inside.
+    radius = 0.0030
+    # ONE continuous smooth path: lead-in -> 3 turns winding around the bar
+    # -> tail tuck. The connectors between turns read as natural winding.
+    # A single swept tube = no intersecting pieces, no cap fans, no shards.
+    segs = [np.array([[0.0060, 0.0, 0.0], [0.0040, 0.0, 0.0], [0.0025, 0.0, 0.0]])]
+    for th in (-0.5, 0.0, 0.5):
+        segs.append(loop(-0.0030, 0.0045, 0.0040, th))
     segs.append(np.array([[0.0, 0.001, 0.001], [-0.0005, 0.0015, 0.0005]]))
     pts = np.vstack(segs)
-    radius = 0.0030
+    kernel = np.ones(7) / 7.0
+    for _ in range(2):
+        padded = np.vstack([np.repeat(pts[[0]], 3, axis=0), pts,
+                            np.repeat(pts[[-1]], 3, axis=0)])
+        pts = np.apply_along_axis(
+            lambda c: np.convolve(c, kernel, mode="valid"), 0, padded)
     verts, normals, uvs, faces = _sweep_smooth(pts, radius=radius)
     path_len = float(np.linalg.norm(np.diff(pts, axis=0), axis=1).sum())
     uvs[:, 0] *= path_len / (3.5 * 2.0 * radius)
@@ -449,6 +452,19 @@ def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
     mesh.usernormal = normals.flatten().astype(np.float32)
     mesh.userface = faces.flatten()
     mesh.usertexcoord = uvs.flatten().astype(np.float32)
+    # Far-side knots need the coil mirrored 180° about y. MuJoCo bakes the
+    # mesh's principal-frame offset into the geom's pos/quat at compile time
+    # and composing that with a user quat lands the knot ROTATED WRONG (the
+    # lump rendered as a horizontal disc with the lead-in stabbing out as
+    # shards — 穿模). Bake the mirror into a second mesh instead and keep
+    # the geom quat identity. R_y(180°) is a proper rotation: winding and
+    # uvs carry over unchanged.
+    rot180 = np.array([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]])
+    mesh_m = spec.add_mesh(name=f"{name}_mir")
+    mesh_m.uservert = (verts @ rot180.T).flatten().astype(np.float32)
+    mesh_m.usernormal = (normals @ rot180.T).flatten().astype(np.float32)
+    mesh_m.userface = faces.flatten()
+    mesh_m.usertexcoord = uvs.flatten().astype(np.float32)
 
 
 def _add_knots(spec: mujoco.MjSpec, knot_use: list[tuple[str, str, float]], red: list[str]) -> None:
@@ -461,11 +477,8 @@ def _add_knots(spec: mujoco.MjSpec, knot_use: list[tuple[str, str, float]], red:
         trunk.add_geom(
             name=f"{prefix}tug_knot_{site}",
             type=mujoco.mjtGeom.mjGEOM_MESH,
-            meshname="tug_knot",
+            meshname="tug_knot" if sign > 0 else "tug_knot_mir",
             pos=(eye[0] + sign * EYE_RING_MAJOR, 0.0, eye[2]),
-            # sign<0: mirror the coil 180° about y so its +x lead-in faces
-            # the incoming rope (the ±0.5 rad turn set is mirror-symmetric).
-            quat=(1.0, 0.0, 0.0, 0.0) if sign > 0 else (0.0, 0.0, 1.0, 0.0),
             material="tug_knot",
             contype=0,
             conaffinity=0,
@@ -474,18 +487,31 @@ def _add_knots(spec: mujoco.MjSpec, knot_use: list[tuple[str, str, float]], red:
 SPAN_SMOOTH_ALPHA = 16
 
 
-def _sweep_smooth(points: np.ndarray, radius: float = SPAN_RADIUS) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def _sweep_smooth(points: np.ndarray, radius: float = SPAN_RADIUS,
+                  closed: bool = False) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Smooth cylinder swept along `points` (clean silhouette — the
     reference rope's twist is texture, not geometry; a 3-ply silhouette
-    aliases into ragged fuzz at video resolution). (verts, normals, uvs, faces)"""
+    aliases into ragged fuzz at video resolution). Frames are PARALLEL
+    TRANSPORTED along the path — per-point independent frames flip at
+    curvature changes and pinch the tube into shards (穿模). closed=True
+    wraps the tube into a seamless ring (no end caps).
+    (verts, normals, uvs, faces)"""
     n = len(points)
-    tangents = np.gradient(points, axis=0)
+    if closed:
+        tangents = np.roll(points, -1, axis=0) - np.roll(points, 1, axis=0)
+    else:
+        tangents = np.gradient(points, axis=0)
     tangents /= np.linalg.norm(tangents, axis=1, keepdims=True)
-    ref = np.tile(np.array([0.0, 0.0, 1.0]), (n, 1))
-    flip = np.abs((tangents * ref).sum(axis=1)) > 0.9
-    ref[flip] = np.array([1.0, 0.0, 0.0])
-    u = ref - (ref * tangents).sum(axis=1, keepdims=True) * tangents
-    u /= np.linalg.norm(u, axis=1, keepdims=True)
+    ref = np.array([0.0, 0.0, 1.0])
+    if abs(tangents[0] @ ref) > 0.9:
+        ref = np.array([1.0, 0.0, 0.0])
+    u = np.zeros((n, 3))
+    u[0] = ref - (ref @ tangents[0]) * tangents[0]
+    u[0] /= np.linalg.norm(u[0])
+    for i in range(1, n):
+        u[i] = u[i - 1] - (u[i - 1] @ tangents[i]) * tangents[i]
+        un = np.linalg.norm(u[i])
+        u[i] = u[i - 1] if un < 1e-9 else u[i] / un
     w = np.cross(tangents, u)
     alphas = 2.0 * np.pi * np.arange(SPAN_SMOOTH_ALPHA) / SPAN_SMOOTH_ALPHA
     cos_a = np.cos(alphas)[None, :, None]
@@ -499,15 +525,19 @@ def _sweep_smooth(points: np.ndarray, radius: float = SPAN_RADIUS) -> tuple[np.n
     uvs[:, 0] = np.repeat(t_frac, SPAN_SMOOTH_ALPHA)
     uvs[:, 1] = np.tile(alphas / (2.0 * np.pi), n)
     faces = []
-    for i in range(n - 1):
+    seg = n if closed else n - 1
+    for i in range(seg):
+        i2 = (i + 1) % n
         for j in range(SPAN_SMOOTH_ALPHA):
             j2 = (j + 1) % SPAN_SMOOTH_ALPHA
             a = i * SPAN_SMOOTH_ALPHA + j
-            b = (i + 1) * SPAN_SMOOTH_ALPHA + j
-            c = (i + 1) * SPAN_SMOOTH_ALPHA + j2
+            b = i2 * SPAN_SMOOTH_ALPHA + j
+            c = i2 * SPAN_SMOOTH_ALPHA + j2
             d = i * SPAN_SMOOTH_ALPHA + j2
             faces.append((a, b, c))
             faces.append((a, c, d))
+    if closed:
+        return verts, normals, uvs, np.array(faces, dtype=np.int32)
     # End caps: an open tube end reads as a SEVERED rope (dark hollow ring).
     for ring, tip_i, flip in ((0, 0, True), (n - 1, n - 1, False)):
         tip = len(verts)
@@ -646,11 +676,11 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         chord = float(np.linalg.norm(chord_vec))
         if chord < 1e-6:
             continue
-        # The rope's tip dives to the rim's surface (bin rounding moves it
-        # ±2.5 mm: worst case it retracts INTO the ring plate / hole, where
-        # the cap hides inside solid geometry; best case deep in the coil).
-        # The cap is NEVER exposed outside the knot — no severed-tip read.
-        back = EYE_RING_MAJOR + 0.0005
+        # The rope's tip ends 1 mm INSIDE the rim (in the ring plate / knot
+        # lump volume) so its end cap can never poke out through the coil
+        # surface as dark shards (穿模). Bin rounding (±2.5 mm) only moves
+        # it between the plate and deeper inside the lump — always buried.
+        back = EYE_RING_MAJOR - 0.001
         chord_vec /= chord
         e0 = p0 + chord_vec * back
         e1 = p1 - chord_vec * back
