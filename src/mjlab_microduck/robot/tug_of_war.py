@@ -253,10 +253,6 @@ def _add_rig_materials(spec: mujoco.MjSpec) -> None:
     orange.rgba = (0.92, 0.42, 0.08, 1.0)   # anodized-orange carabiner
     orange.specular = 0.85
     orange.shininess = 0.6
-    knot = spec.add_material(name="tug_knot")
-    knot.rgba = (0.83, 0.74, 0.55, 1.0)   # rope-average gold — reads continuous with the span
-    knot.specular = 0.3
-    knot.shininess = 0.3
 
 
 def _load_hook_stls(spec: mujoco.MjSpec) -> None:
@@ -385,36 +381,29 @@ def _site_world(data: mujoco.MjData, body_id: int, local: np.ndarray,
     out += data.xpos[body_id]
 
 
-def _local_span_curve(chord: float, sag: float) -> np.ndarray:
-    """Sagging rope in its local frame: x from -chord/2..+chord/2, ends AT
-    the wrap sites with ZERO slope (sin² profile) — the rope leaves the
-    knot exactly along the pull direction, so it passes the eye's tunnel
-    straight, no rim contact. A parabola leaves at ±4·sag slope and clips."""
-    t = np.linspace(0.0, 1.0, SPAN_T_SEGMENTS)
-    points = np.zeros((SPAN_T_SEGMENTS, 3))
-    points[:, 0] = (t - 0.5) * chord
-    points[:, 2] = -sag * np.sin(np.pi * t) ** 2
-    points[:, 1] = min(0.006, 0.5 * sag + 0.001) * np.sin(np.pi * t)
-    return points
-
-
 SPAN_RADIUS = 0.0025   # Ø5 mm rope — slim, threads the Ø11 mm holes with room
+KNOT_RADIUS = 0.0026   # knot tube: 0.1 mm fatter — swallows the rope, no z-fight
 
 EYE_RING_MAJOR = 0.008   # pad-eye ring radius (mirrors hardware/tug-rig/cad_collar.py EYE_MAJOR)
 EYE_INNER_R = 0.0055     # pad-eye hole radius (EYE_MAJOR - EYE_TUBE)
-KNOT_MAJOR = 0.0045      # stopper-knot coil radius around the rope itself
+
+# Baked-mesh bookkeeping: each span variant bakes the knots IN THE SAME
+# SWEPT PATH as the rope (one tube, zero junction artifacts — 穿模不可能).
+# RING_BAKE: ring centre sits this far outside the span curve's end.
+# BACK_E: the rope's tail tip lands this far from the ring centre — tuned
+# so the knot lump sits ON the rim bar (path smoothing pulls the extracted
+# tail ring ~2.5 mm into the lump; BACK_E compensates).
+RING_BAKE = 0.012
+BACK_E = 0.003
 
 
-def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
-    """Chunky coil plugging the eye (knot frame: ring centre at
-    -EYE_RING_MAJOR on x, incoming span rope from +x). THREE closed loops
-    wrap the rim bar FROM INSIDE THE HOLE (turn centres 3 mm inside, loops
-    encircle the bar and bulge out of both plate faces) — the plugged-hole
-    silhouette reads as "套在环上" from the face-on match camera. Loops are
-    CLOSED sweeps: no free ends, no joint spikes (the previous single
-    open path pinched into shards at every segment joint — 穿模). A short
-    open lead-in merges the coil into the span rope; both its caps are
-    buried (one in the coil, one swallowed with the rope tip).
+def _knot_path() -> np.ndarray:
+    """One end's knot in the knot frame (ring centre at -EYE_RING_MAJOR on
+    x, incoming rope from +x): lead-in -> 3 turns winding around the rim
+    bar from inside the hole (the plugged-hole silhouette reads as
+    套在环上) -> tail diving into the ring plate. Turns step 0.69 rad
+    (~5.5 mm) along the rim arc = one tube diameter apart, so adjacent
+    turns TOUCH instead of interpenetrating.
     """
     eye_c = np.array([-EYE_RING_MAJOR, 0.0, 0.0])
 
@@ -429,61 +418,42 @@ def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
                         np.zeros_like(t)], axis=1)
         return rot_y(pts, th)
 
-    radius = 0.0030
-    # ONE continuous smooth path: lead-in -> 3 turns winding around the bar
-    # -> tail tuck. The connectors between turns read as natural winding.
-    # A single swept tube = no intersecting pieces, no cap fans, no shards.
-    segs = [np.array([[0.0060, 0.0, 0.0], [0.0040, 0.0, 0.0], [0.0025, 0.0, 0.0]])]
-    for th in (-0.5, 0.0, 0.5):
+    segs = [np.array([[0.0070, 0.0, 0.0], [0.0050, 0.0, 0.0], [0.0035, 0.0, 0.0]])]
+    for th in (-0.75, 0.0, 0.75):
         segs.append(loop(-0.0030, 0.0045, 0.0040, th))
-    segs.append(np.array([[0.0, 0.001, 0.001], [-0.0005, 0.0015, 0.0005]]))
-    pts = np.vstack(segs)
-    kernel = np.ones(7) / 7.0
-    for _ in range(2):
-        padded = np.vstack([np.repeat(pts[[0]], 3, axis=0), pts,
-                            np.repeat(pts[[-1]], 3, axis=0)])
-        pts = np.apply_along_axis(
-            lambda c: np.convolve(c, kernel, mode="valid"), 0, padded)
-    verts, normals, uvs, faces = _sweep_smooth(pts, radius=radius)
-    path_len = float(np.linalg.norm(np.diff(pts, axis=0), axis=1).sum())
-    uvs[:, 0] *= path_len / (3.5 * 2.0 * radius)
-    mesh = spec.add_mesh(name=name)
-    mesh.uservert = verts.flatten().astype(np.float32)
-    mesh.usernormal = normals.flatten().astype(np.float32)
-    mesh.userface = faces.flatten()
-    mesh.usertexcoord = uvs.flatten().astype(np.float32)
-    # Far-side knots need the coil mirrored 180° about y. MuJoCo bakes the
-    # mesh's principal-frame offset into the geom's pos/quat at compile time
-    # and composing that with a user quat lands the knot ROTATED WRONG (the
-    # lump rendered as a horizontal disc with the lead-in stabbing out as
-    # shards — 穿模). Bake the mirror into a second mesh instead and keep
-    # the geom quat identity. R_y(180°) is a proper rotation: winding and
-    # uvs carry over unchanged.
-    rot180 = np.array([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]])
-    mesh_m = spec.add_mesh(name=f"{name}_mir")
-    mesh_m.uservert = (verts @ rot180.T).flatten().astype(np.float32)
-    mesh_m.usernormal = (normals @ rot180.T).flatten().astype(np.float32)
-    mesh_m.userface = faces.flatten()
-    mesh_m.usertexcoord = uvs.flatten().astype(np.float32)
+    segs.append(np.array([[-0.0010, 0.0, -0.003], [-0.0020, -0.001, -0.005]]))
+    return np.vstack(segs)
 
 
-def _add_knots(spec: mujoco.MjSpec, knot_use: list[tuple[str, str, float]], red: list[str]) -> None:
-    """A stopper knot on every pad eye that carries a rope — coil on the
-    face FACING the incoming rope (sign = direction of the other duck)."""
-    for prefix, site, sign in knot_use:
-        trunk = _find_body(spec, f"{prefix}trunk_base")
-        team = "red" if prefix in red else "blue"
-        eye = ring_local(team) if site == "rope_hook" else chest_local(team)
-        trunk.add_geom(
-            name=f"{prefix}tug_knot_{site}",
-            type=mujoco.mjtGeom.mjGEOM_MESH,
-            meshname="tug_knot" if sign > 0 else "tug_knot_mir",
-            pos=(eye[0] + sign * EYE_RING_MAJOR, 0.0, eye[2]),
-            material="tug_knot",
-            contype=0,
-            conaffinity=0,
-            density=0.0,
-        )
+def _local_span_curve(chord: float, sag: float) -> tuple[np.ndarray, np.ndarray]:
+    """Full rope path in the span-local frame: left knot (reversed) ->
+    sagging span (sin² profile, zero end slope) -> right knot. Ring centres
+    at ±(chord/2 + RING_BAKE). Returns (points, per-point radii)."""
+    knot = _knot_path()
+    r0 = np.array([-(chord / 2.0 + RING_BAKE), 0.0, 0.0])
+    r1 = -r0
+    k_left = knot.copy()
+    k_left[:, 0] += EYE_RING_MAJOR
+    k_left += r0                      # left end: rope toward +x, as authored
+    k_right = knot.copy()
+    k_right[:, 0] = -k_right[:, 0] - EYE_RING_MAJOR
+    k_right += r1                     # right end: mirrored, rope toward -x
+
+    t = np.linspace(0.0, 1.0, SPAN_T_SEGMENTS)
+    span = np.zeros((SPAN_T_SEGMENTS, 3))
+    span[:, 0] = (t - 0.5) * chord
+    span[:, 2] = -sag * np.sin(np.pi * t) ** 2
+    span[:, 1] = min(0.006, 0.5 * sag + 0.001) * np.sin(np.pi * t)
+
+    # The knot lead-ins overlap the span ends by ~3 mm (they slide INTO the
+    # span tube) — drop the duplicated span points so the path never
+    # backtracks.
+    points = np.vstack([k_left[::-1], span[2:-2], k_right])
+    radii = np.full(len(points), KNOT_RADIUS)
+    radii[len(k_left):len(points) - len(k_right)] = SPAN_RADIUS
+    return points, radii
+
+
 SPAN_SMOOTH_ALPHA = 16
 
 
@@ -517,7 +487,8 @@ def _sweep_smooth(points: np.ndarray, radius: float = SPAN_RADIUS,
     cos_a = np.cos(alphas)[None, :, None]
     sin_a = np.sin(alphas)[None, :, None]
     normals = cos_a * u[:, None, :] + sin_a * w[:, None, :]      # (n, A, 3)
-    verts = points[:, None, :] + radius * normals
+    radii = np.broadcast_to(np.asarray(radius, dtype=float), (n,))[:, None, None]
+    verts = points[:, None, :] + radii * normals
     verts = verts.reshape(-1, 3)
     normals = normals.reshape(-1, 3)
     uvs = np.zeros((n * SPAN_SMOOTH_ALPHA, 2))
@@ -650,10 +621,19 @@ def _build_span_variants(spec: mujoco.MjSpec) -> None:
     for ci, chord in enumerate(CHORD_BINS):
         for si, sag_frac in enumerate(SAG_BINS):
             sag = sag_frac * SAG_MAX
-            points = _local_span_curve(float(chord), sag)
-            verts, normals, uvs, faces = _sweep_smooth(points)
+            points, radii = _local_span_curve(float(chord), sag)
+            # Round the segment joints (knot lead-in -> span -> knot): hard
+            # corners pinch the tube. Two light passes keep the coil shape.
+            kernel = np.ones(5) / 5.0
+            for _ in range(2):
+                padded = np.vstack([np.repeat(points[[0]], 2, axis=0), points,
+                                    np.repeat(points[[-1]], 2, axis=0)])
+                points = np.apply_along_axis(
+                    lambda c: np.convolve(c, kernel, mode="valid"), 0, padded)
+            verts, normals, uvs, faces = _sweep_smooth(points, radius=radii)
             # Twist pitch ≈ 3.5 rope diameters, measured off the reference.
-            uvs[:, 0] *= float(chord) / (3.5 * 2.0 * SPAN_RADIUS)
+            path_len = float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum())
+            uvs[:, 0] *= path_len / (3.5 * 2.0 * SPAN_RADIUS)
             mesh = spec.add_mesh(name=f"tug_var_{ci}_{si}")
             mesh.uservert = verts.flatten().astype(np.float32)
             mesh.usernormal = normals.flatten().astype(np.float32)
@@ -676,11 +656,10 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         chord = float(np.linalg.norm(chord_vec))
         if chord < 1e-6:
             continue
-        # The rope's tip ends 1 mm INSIDE the rim (in the ring plate / knot
-        # lump volume) so its end cap can never poke out through the coil
-        # surface as dark shards (穿模). Bin rounding (±2.5 mm) only moves
-        # it between the plate and deeper inside the lump — always buried.
-        back = EYE_RING_MAJOR - 0.001
+        # The rope's tail tip lands BACK_E past the ring centre, deep inside
+        # the baked knot lump. Bin rounding (±2.5 mm) only moves it within
+        # the lump — the cap is always buried.
+        back = BACK_E
         chord_vec /= chord
         e0 = p0 + chord_vec * back
         e1 = p1 - chord_vec * back
@@ -688,7 +667,11 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         span_len = float(np.linalg.norm(span_vec))
         slack = max(0.0, span.nominal - chord)
         sag = min(SAG_MAX, SAG_PER_SLACK * slack + 0.002)
-        ci = int(np.argmin(np.abs(CHORD_BINS - span_len)))
+        # Pick the variant whose actual tail-to-tail length (baked knots
+        # included) is closest to the target span.
+        tail_dists = np.linalg.norm(
+            span.variant_ends[:, 0, 2] - span.variant_ends[:, 0, 0], axis=1)
+        ci = int(np.argmin(np.abs(tail_dists - span_len)))
         si = int(np.argmin(np.abs(np.array(SAG_BINS) * SAG_MAX - sag)))
         model.geom_dataid[span.geom_id] = span.variant_mesh_ids[ci, si]
         # Solve the mocap frame against the COMPILED mesh verts (renderer
@@ -755,15 +738,10 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
     # Rope chain, far red → center → far blue. Two cords per link (left/right
     # waist sites) so a link transmits no yaw torque between teammates.
     chain = list(reversed(red)) + blue
-    knot_use: list[tuple[str, str, float]] = []
     for pa, pb in zip(chain[:-1], chain[1:]):
         nominal = gap if pa == red[0] else spacing
         link_len = nominal + ROPE_SLACK
         site_a, site_b = _span_hook_sites(pa, pb, red)
-        # The knot coils the rim FACING the other duck. Red ducks are
-        # rotated 180° (world +x = their trunk-local -x), blue are not.
-        knot_use.append((pa, site_a, (1.0 if pa in blue else -1.0) * +1.0))
-        knot_use.append((pb, site_b, (1.0 if pb in blue else -1.0) * -1.0))
         cord = parent.add_tendon(
             name=f"tug_{pa or 'r0_'}{pb}cord",
             stiffness=ROPE_STIFFNESS,
@@ -785,8 +763,6 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
     _add_rig_materials(parent)
     _load_hook_stls(parent)
     _add_harness_rings(parent, n_per_team)
-    _knot_mesh(parent)
-    _add_knots(parent, knot_use, red)
     _build_span_variants(parent)
     n_strands = 2 * n_per_team - 1
     for idx in range(n_strands):
