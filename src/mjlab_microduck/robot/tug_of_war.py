@@ -366,24 +366,23 @@ def _local_span_curve(chord: float, sag: float) -> np.ndarray:
     return points
 
 
-SPAN_RADIUS = 0.004   # Ø8 mm rope — threads the Ø9 mm pad-eye holes cleanly
+SPAN_RADIUS = 0.0025   # Ø5 mm rope — slim, threads the Ø11 mm holes with room
 
 EYE_RING_MAJOR = 0.008   # pad-eye ring radius (mirrors hardware/tug-rig/cad_collar.py EYE_MAJOR)
 EYE_INNER_R = 0.0055     # pad-eye hole radius (EYE_MAJOR - EYE_TUBE)
-KNOT_MAJOR = 0.0045      # rope coil cinching the eye's rim on the pull side (lark's head)
+KNOT_MAJOR = 0.0045      # stopper-knot coil radius around the rope itself
 
 
 def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
-    """The tie at each eye: a 2.5-turn rope coil wound around the rim bar
-    on the pull side AND around the span rope's end (the standing part is
-    cinched against the bar, the working end disappears into the coil —
-    exactly how a short rope gets knotted onto a ring).
+    """Stopper knot: a 2.5-turn rope coil wound around the STANDING ROPE
+    itself, butted against the ring's outer face. The rope passes through
+    the ring's hole and its end disappears into this coil — knot and rope
+    are visibly ONE rope.
     """
-    turns, pitch = 2.5, 0.0035
+    turns, pitch = 2.5, 0.0025
     t = np.linspace(0.0, 2.0 * np.pi * turns, 64)
-    coil_pts = np.stack([KNOT_MAJOR * np.cos(t),
-                         (t / (2 * np.pi * turns) - 0.5) * turns * pitch,
-                         KNOT_MAJOR * np.sin(t)], axis=1)
+    coil_pts = np.stack([(t / (2 * np.pi * turns) - 0.5) * turns * pitch,
+                         KNOT_MAJOR * np.cos(t), KNOT_MAJOR * np.sin(t)], axis=1)
     verts, normals, uvs, faces = _sweep_smooth(coil_pts)
     uvs[:, 0] *= (turns * 2.0 * np.pi * KNOT_MAJOR) / (3.5 * 2.0 * SPAN_RADIUS)
     mesh = spec.add_mesh(name=name)
@@ -394,8 +393,8 @@ def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
 
 
 def _add_knots(spec: mujoco.MjSpec, knot_use: list[tuple[str, str, float]], red: list[str]) -> None:
-    """A wound knot on every pad eye that carries a rope — coil on the rim
-    FACING the incoming rope (sign = direction of the other duck)."""
+    """A stopper knot on every pad eye that carries a rope — coil on the
+    face FACING the incoming rope (sign = direction of the other duck)."""
     for prefix, site, sign in knot_use:
         trunk = _find_body(spec, f"{prefix}trunk_base")
         team = "red" if prefix in red else "blue"
@@ -404,7 +403,7 @@ def _add_knots(spec: mujoco.MjSpec, knot_use: list[tuple[str, str, float]], red:
             name=f"{prefix}tug_knot_{site}",
             type=mujoco.mjtGeom.mjGEOM_MESH,
             meshname="tug_knot",
-            pos=(eye[0] + sign * EYE_RING_MAJOR, 0.0, eye[2]),
+            pos=(eye[0] + sign * 0.0065, 0.0, eye[2]),
             material="tug_knot",
             contype=0,
             conaffinity=0,
@@ -585,10 +584,10 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         chord = float(np.linalg.norm(chord_vec))
         if chord < 1e-6:
             continue
-        # The rope's end disappears INTO the wound coil on the rim (pull
-        # each end back from the site by EYE_MAJOR so the tip tucks into
-        # the knot, never sticking out past it).
-        back = EYE_RING_MAJOR
+        # The rope threads the eye's tunnel and its end disappears into the
+        # stopper coil butted on the ring's outer face (pull each end back
+        # from the site by 9 mm so the tip tucks INTO the knot).
+        back = 0.009
         chord_vec /= chord
         e0 = p0 + chord_vec * back
         e1 = p1 - chord_vec * back
