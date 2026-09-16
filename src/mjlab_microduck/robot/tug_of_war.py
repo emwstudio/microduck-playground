@@ -374,17 +374,17 @@ KNOT_MAJOR = 0.0045      # stopper-knot coil radius around the rope itself
 
 
 def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
-    """Stopper knot: a 2.5-turn rope coil wound around the STANDING ROPE
-    itself, butted against the ring's outer face. The rope passes through
-    the ring's hole and its end disappears into this coil — knot and rope
-    are visibly ONE rope.
+    """Lark's-head bight on the eye's near rim: ONE clean loop of rope in
+    the xy plane wrapping the rim section — inner strand threads the hole
+    along y (out one face, back the other: rope visibly THROUGH the ring),
+    outer strand wraps the plate's outside. The span rope ends into the
+    loop and vanishes — knot and rope are one.
     """
-    turns, pitch = 2.5, 0.0025
-    t = np.linspace(0.0, 2.0 * np.pi * turns, 64)
-    coil_pts = np.stack([(t / (2 * np.pi * turns) - 0.5) * turns * pitch,
-                         KNOT_MAJOR * np.cos(t), KNOT_MAJOR * np.sin(t)], axis=1)
-    verts, normals, uvs, faces = _sweep_smooth(coil_pts)
-    uvs[:, 0] *= (turns * 2.0 * np.pi * KNOT_MAJOR) / (3.5 * 2.0 * SPAN_RADIUS)
+    t = np.linspace(0.0, 2.0 * np.pi, 41)
+    a, b = 0.007, 0.0075
+    loop_pts = np.stack([a * np.cos(t), b * np.sin(t), np.zeros_like(t)], axis=1)
+    verts, normals, uvs, faces = _sweep_smooth(loop_pts)
+    uvs[:, 0] *= (2 * np.pi * a) / (3.5 * 2.0 * SPAN_RADIUS)
     mesh = spec.add_mesh(name=name)
     mesh.uservert = verts.flatten().astype(np.float32)
     mesh.usernormal = normals.flatten().astype(np.float32)
@@ -403,7 +403,7 @@ def _add_knots(spec: mujoco.MjSpec, knot_use: list[tuple[str, str, float]], red:
             name=f"{prefix}tug_knot_{site}",
             type=mujoco.mjtGeom.mjGEOM_MESH,
             meshname="tug_knot",
-            pos=(eye[0] + sign * 0.0065, 0.0, eye[2]),
+            pos=(eye[0] + sign * EYE_RING_MAJOR, 0.0, eye[2]),
             material="tug_knot",
             contype=0,
             conaffinity=0,
@@ -584,10 +584,10 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         chord = float(np.linalg.norm(chord_vec))
         if chord < 1e-6:
             continue
-        # The rope threads the eye's tunnel and its end disappears into the
-        # stopper coil butted on the ring's outer face (pull each end back
-        # from the site by 9 mm so the tip tucks INTO the knot).
-        back = 0.009
+        # The rope's end disappears INTO the bight loop on the rim (pull
+        # each end back from the site by EYE_MAJOR so the tip tucks into
+        # the knot, never sticking out past it).
+        back = EYE_RING_MAJOR
         chord_vec /= chord
         e0 = p0 + chord_vec * back
         e1 = p1 - chord_vec * back

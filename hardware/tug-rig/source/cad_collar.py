@@ -171,43 +171,40 @@ def lugs() -> trimesh.Trimesh:
 
 
 def tow_eye(center: np.ndarray) -> trimesh.Trimesh:
-    """One-piece pad eye fused to the band, hole axis ALONG the pull (x).
+    """One-piece pad-eye plate fused to the band (no torus + neck stack).
 
-    A rope running fore-aft (x) can only thread a ring whose hole is along
-    x: a straight rope crossing a side-facing plate (hole along y) lies in
-    the plate's plane and MUST pierce the rim — no hole size fixes that.
-    So the eye is an annulus plate in the yz plane (5 mm tunnel along x),
-    bridged to the band by a boss that stays inside the rim annulus, all
-    one connected cast part.
+    A flat plate (5 mm thick, in the xz plane) shaped like a lollipop: a
+    rectangular stem growing out of the band flares into a circular head
+    around the Ø9 mm hole; concave corners are filleted so the ring and
+    the boss read as ONE cast part.
     """
-    from shapely.geometry import Point
+    from shapely.geometry import Point, box as shapely_box
+    from shapely.ops import unary_union
     sign = 1.0 if center[0] > 0 else -1.0
     band_face = sign * (abs(center[0]) - EYE_STANDOFF - EYE_MAJOR - EYE_TUBE)
-    head = Point(0.0, Z_C).buffer(EYE_MAJOR + EYE_TUBE, resolution=56)
-    hole = Point(0.0, Z_C).buffer(EYE_INNER_R, resolution=48)
-    plate = trimesh.creation.extrude_polygon(head.difference(hole), EYE_TUBE * 2)
-    # local (x,y,z) -> world (y,z,x): the extrusion becomes the pull axis
-    plate.apply_transform(np.array([[0.0, 0.0, 1.0, 0.0],
-                                    [1.0, 0.0, 0.0, 0.0],
-                                    [0.0, 1.0, 0.0, 0.0],
-                                    [0.0, 0.0, 0.0, 1.0]]))
-    plate.apply_translation((center[0] - EYE_TUBE, 0.0, 0.0))
-    # boss: bridges band -> plate at the plate's bottom rim (top face stays
-    # 1 mm clear of the hole disk, straight down)
-    x0 = band_face - sign * BAND_T
-    x1 = center[0] + sign * EYE_TUBE
-    boss = trimesh.creation.box(extents=(abs(x1 - x0), 0.010, 0.004))
-    boss.apply_translation(((x0 + x1) / 2, 0.0, Z_C - EYE_MAJOR - EYE_TUBE / 2 + 0.001))
-    return trimesh.boolean.union([plate, boss], engine="manifold")
+    head = Point(float(center[0]), Z_C).buffer(EYE_MAJOR + EYE_TUBE, resolution=48)
+    stem = shapely_box(min(band_face - sign * BAND_T, center[0] + sign * 0.001),
+                       Z_C - 0.005,
+                       max(band_face - sign * BAND_T, center[0] + sign * 0.001),
+                       Z_C + 0.005)
+    outline = unary_union([head, stem]).buffer(0.001).buffer(-0.001)  # fillet the shoulders
+    hole = Point(float(center[0]), Z_C).buffer(EYE_INNER_R, resolution=40)
+    outline = outline.difference(hole)
+    plate = trimesh.creation.extrude_polygon(outline, EYE_TUBE * 2)
+    plate.apply_transform(trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0]))
+    plate.apply_translation((0.0, EYE_TUBE, 0.0))   # centre the plate on y=0
+    return plate
 
 
 def hole_gauge_ok(collar: trimesh.Trimesh) -> bool:
-    """Push a Ø8 mm gauge pin along the pull direction (x) through each eye
-    centre: the collar must not intersect it (tunnel clear for the rope)."""
-    span = 2 * (EYE_MAJOR + EYE_TUBE) + 0.004   # tunnel extent + small margin
+    """Push a Ø8 mm gauge pin SIDEWAYS (along y) through each eye centre:
+    the collar must not intersect it (hole channel clear for the rope)."""
+    span = 2 * (EYE_MAJOR + EYE_TUBE) + 0.004   # ring tube extent + small margin
+    # (longer pins would sweep the neighbouring band at ±20° — the rope
+    # never goes there; the channel that matters is through the ring)
     for center in (EYE_FRONT, EYE_BACK):
         pin = trimesh.creation.cylinder(radius=EYE_INNER_R - 0.0005, height=span, sections=24)
-        pin.apply_transform(trimesh.geometry.align_vectors([0, 0, 1], [1, 0, 0]))
+        pin.apply_transform(trimesh.geometry.align_vectors([0, 0, 1], [0, 1, 0]))
         pin.apply_translation(center)
         if trimesh.boolean.intersection([collar, pin], engine="manifold").volume > 1e-12:
             return False
