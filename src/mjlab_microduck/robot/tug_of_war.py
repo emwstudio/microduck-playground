@@ -104,7 +104,7 @@ ROPE_PLY_CENTER_R = 0.0038
 ROPE_PLY_TUBE_R = 0.0043
 ROPE_PLY_TWISTS_PER_TURN = 4
 
-CHORD_BINS = np.round(np.arange(0.16, 0.38, 0.02), 2)
+CHORD_BINS = np.round(np.arange(0.10, 0.38, 0.01), 2)
 SAG_BINS = (0.0, 0.33, 0.67, 1.0)   # fraction of SAG_MAX
 SPAN_T_SEGMENTS = 26
 SPAN_ALPHA_SEGMENTS = 6
@@ -354,7 +354,7 @@ def _local_span_curve(chord: float, sag: float) -> np.ndarray:
     the wrap sites with ZERO slope (sin² profile) — the rope leaves the
     knot exactly along the pull direction, so it passes the eye's tunnel
     straight, no rim contact. A parabola leaves at ±4·sag slope and clips."""
-    t = np.linspace(-0.03, 1.03, SPAN_T_SEGMENTS)
+    t = np.linspace(0.0, 1.0, SPAN_T_SEGMENTS)
     points = np.zeros((SPAN_T_SEGMENTS, 3))
     points[:, 0] = (t - 0.5) * chord
     points[:, 2] = -sag * np.sin(np.pi * t) ** 2
