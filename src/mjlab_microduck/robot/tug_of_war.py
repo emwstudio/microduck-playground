@@ -412,7 +412,7 @@ def _knot_path() -> np.ndarray:
         rot = np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
         return (pts - eye_c) @ rot.T + eye_c
 
-    def loop(cx: float, a: float, b: float, th: float, dy: float = 0.0025) -> np.ndarray:
+    def loop(cx: float, a: float, b: float, th: float, dy: float = 0.0) -> np.ndarray:
         # dy: shift the coil toward the match camera (+y maps to world +y
         # through the mocap solve) so the lump rides proud of the eye
         # instead of sinking behind the plate's near face.
