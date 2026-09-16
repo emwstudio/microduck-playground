@@ -32,10 +32,10 @@ def knot_path() -> np.ndarray:
     segs.append(np.stack([6.0 + (phi - np.pi) / (4.0 * np.pi) * 4.5,
                           4.2 * np.cos(phi), 4.2 * np.sin(phi)], axis=1))
     segs += [
-        np.array([[10.8, -2.0, -0.5], [11.5, -3.0, -1.0]]),
-        np.array([[10.0, -3.2, -0.5], [6.0, -3.2, -0.5],
-                  [2.5, -3.0, -1.0]]),                          # tail leg
-        np.array([[0.8, -2.8, -1.0], [-0.5, -3.8, 0.0]]),
+        np.array([[10.8, -1.6, -0.5], [11.5, -2.4, -1.0]]),
+        np.array([[10.0, -2.5, -0.5], [6.0, -2.5, -0.5],
+                  [2.5, -2.4, -1.0]]),                          # tail leg
+        np.array([[0.8, -2.2, -1.0], [-0.5, -3.2, 0.0]]),
     ]
     t = np.linspace(-0.5 * np.pi + 0.3, 1.5 * np.pi + 0.3, 40)  # the full turn
     segs.append(np.stack([-1.2 + 4.8 * np.cos(t),
@@ -67,6 +67,32 @@ def build() -> trimesh.Trimesh:
     return knot
 
 
+def clear_collar(knot: trimesh.Trimesh, clearance: float = 0.25) -> trimesh.Trimesh:
+    """Subtract the collar (inflated by `clearance` mm) from the knot so the
+    assembled pair can NEVER interpenetrate (the orange plate used to bleed
+    through the rope — 穿模). The collar is placed in the knot frame for BOTH
+    rim sides (+x and -x) so the base solid and its mirror are both safe.
+    Trimmed spots read as the rope pressed against the hardware."""
+    collar = trimesh.load(ASSETS / "tug_collar.stl")
+    collar.apply_scale(1000.0)                      # assets are in metres
+    eye = np.array([-68.6, 0.0, 16.0])              # back-eye centre (mm)
+    shells = []
+    for rim in (eye + np.array([8.0, 0, 0]), eye - np.array([8.0, 0, 0])):
+        base = collar.copy()
+        base.apply_translation(-rim)
+        shell = base
+        for d in ([clearance, 0, 0], [-clearance, 0, 0], [0, clearance, 0],
+                  [0, -clearance, 0], [0, 0, clearance], [0, 0, -clearance]):
+            t = base.copy()
+            t.apply_translation(d)
+            shell = trimesh.boolean.union([shell, t], engine="manifold")
+        shells.append(shell)
+    knot = trimesh.boolean.difference([knot] + shells, engine="manifold")
+    knot = max(knot.split(only_watertight=False), key=lambda m: m.volume)
+    assert knot.is_volume and knot.is_watertight
+    return knot
+
+
 def export_both(mesh: trimesh.Trimesh, name: str) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     ASSETS.mkdir(parents=True, exist_ok=True)
@@ -78,7 +104,7 @@ def export_both(mesh: trimesh.Trimesh, name: str) -> None:
 
 
 def main() -> None:
-    knot = build()
+    knot = clear_collar(build())
     export_both(knot, "tug_knot")
     mir = knot.copy()
     mir.apply_transform(np.diag([-1.0, 1.0, 1.0, 1.0]))
