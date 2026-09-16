@@ -418,20 +418,22 @@ def _knot_path() -> np.ndarray:
                         np.zeros_like(t)], axis=1)
         return rot_y(pts, th)
 
-    # ROUND TURN + SERVED TAIL (real-world ring tie, 系在孔上): the rope
-    # makes ONE clean wrap around the bar (visibly through the hole), then
-    # the tail spirals around the standing rope — the helix-on-the-shaft is
-    # the universal "tied off" read, and the hole shows rope THROUGH it,
-    # not a lump hiding the ring.
+    # PRUSIK RING KNOT (普鲁士圆环结, from the user's reference photo): the
+    # standing rope threads the eye (U-turn visibly bending through the
+    # hole), then the working end coils 3 times AROUND THE STANDING ROPE —
+    # neat parallel wraps stacked along the shaft, with the ring's bar
+    # trapped inside the first coil. Slides free, locks under load.
     segs = [
-        np.array([[0.0090, 0.0, 0.0], [0.0070, 0.0, 0.0], [0.0050, 0.0, 0.0],
-                  [0.0030, 0.0, 0.0]]),
-        loop(-0.0013, 0.0035, 0.0042, 0.0),                 # wrap around the bar
+        np.array([[0.0110, 0.0, 0.0], [0.0080, 0.0, 0.0], [0.0050, 0.0, 0.0]]),
+        np.array([[0.0030, 0.0015, 0.0], [-0.0005, 0.0018, 0.0],   # over the rim
+                  [-0.0030, 0.0, 0.0],                            # THROUGH the hole
+                  [-0.0020, -0.0020, 0.0], [0.0, -0.0025, 0.0]]), # U under the bar
     ]
-    phi = np.linspace(0.0, 4.0 * np.pi, 25)
-    spiral = np.stack([0.002 + phi / (4.0 * np.pi) * 0.005,
-                       0.0040 * np.cos(phi), 0.0040 * np.sin(phi)], axis=1)
-    segs.append(spiral)                                      # served tail on the shaft
+    phi = np.linspace(np.pi, np.pi + 6.0 * np.pi, 37)             # 3 snug coils
+    helix = np.stack([-0.001 + (phi - np.pi) / (6.0 * np.pi) * 0.006,
+                      0.0048 * np.cos(phi), 0.0048 * np.sin(phi)], axis=1)
+    segs.append(helix)
+    segs.append(np.array([[0.0040, -0.0020, -0.0010], [0.0045, -0.0010, 0.0]]))
     return np.vstack(segs)
 
 
