@@ -382,7 +382,7 @@ def _site_world(data: mujoco.MjData, body_id: int, local: np.ndarray,
 
 
 SPAN_RADIUS = 0.0025   # Ø5 mm rope — slim, threads the Ø11 mm holes with room
-KNOT_RADIUS = 0.0028   # knot tube: fatter — fills the eye, swallows the rope
+KNOT_RADIUS = 0.0030   # knot tube: fatter — coils read at match zoom, swallows the rope
 
 EYE_RING_MAJOR = 0.008   # pad-eye ring radius (mirrors hardware/tug-rig/cad_collar.py EYE_MAJOR)
 EYE_INNER_R = 0.0055     # pad-eye hole radius (EYE_MAJOR - EYE_TUBE)
@@ -413,17 +413,18 @@ def _knot_path() -> np.ndarray:
         return (pts - eye_c) @ rot.T + eye_c
 
     def loop(cx: float, a: float, b: float, th: float, dy: float = 0.0) -> np.ndarray:
-        # dy=0: keep the coil IN the plate plane so it stays visible through
-        # the hole (sinking -y hides it behind the plate's near face and the
-        # eye reads EMPTY). cx deep toward the hole centre = 系在孔上.
         t = np.linspace(0.0, 2.0 * np.pi, 33)[:-1]   # periodic, no duplicate
         pts = np.stack([cx + a * np.cos(t), dy + b * np.sin(t),
                         np.zeros_like(t)], axis=1)
         return rot_y(pts, th)
 
+    # FIVE snug turns hugging a long section of the rim BAR (spacing 0.55 rad
+    # ≈ 4.4 mm < tube Ø6 — coils pack tight like a real whipping): the rope
+    # visibly WRAPS the ring's bar — 系在环上. Hole-side arcs dip into the
+    # opening (strands through the hole); the hole itself stays open.
     segs = [np.array([[0.0070, 0.0, 0.0], [0.0050, 0.0, 0.0], [0.0035, 0.0, 0.0]])]
-    for th in (-0.75, 0.0, 0.75):
-        segs.append(loop(-0.0040, 0.0045, 0.0040, th))
+    for th in (-1.1, -0.55, 0.0, 0.55, 1.1):
+        segs.append(loop(-0.0013, 0.0032, 0.0038, th))
     segs.append(np.array([[-0.0010, 0.0, -0.003], [-0.0020, -0.001, -0.005]]))
     return np.vstack(segs)
 
