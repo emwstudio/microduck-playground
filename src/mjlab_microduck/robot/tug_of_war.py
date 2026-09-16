@@ -584,10 +584,10 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         chord = float(np.linalg.norm(chord_vec))
         if chord < 1e-6:
             continue
-        # The rope's tip lands exactly ON the bight loop's outer arc
-        # (eye + EYE_MAJOR + loop_a = eye + 15 mm, past the plate's outer
-        # edge) and merges into the knot — no free end anywhere.
-        back = EYE_RING_MAJOR + 0.007
+        # The rope's tip ends inside the bight loop, 3 mm PAST the knot
+        # centre toward the eye (still in the Ø11 hole's void, clear of
+        # the rim) — the loop wraps the rope's end, no gap, no free tip.
+        back = EYE_RING_MAJOR - 0.003
         chord_vec /= chord
         e0 = p0 + chord_vec * back
         e1 = p1 - chord_vec * back
@@ -595,11 +595,7 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         span_len = float(np.linalg.norm(span_vec))
         slack = max(0.0, span.nominal - chord)
         sag = min(SAG_MAX, SAG_PER_SLACK * slack + 0.002)
-        # largest bin whose RENDERED half-length (bin/2 + rope tube) does
-        # not exceed the span — a longer rope pokes its capped tip out of
-        # the knot (reads as severed); a shorter one tucks inside
-        below = np.nonzero(CHORD_BINS <= span_len - 2 * SPAN_RADIUS)[0]
-        ci = int(below[-1]) if len(below) else 0
+        ci = int(np.argmin(np.abs(CHORD_BINS - span_len)))
         si = int(np.argmin(np.abs(np.array(SAG_BINS) * SAG_MAX - sag)))
         model.geom_dataid[span.geom_id] = span.variant_mesh_ids[ci, si]
         # Mocap frame: x along the chord; local +z as close to world-UP as
