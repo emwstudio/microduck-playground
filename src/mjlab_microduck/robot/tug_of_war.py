@@ -333,9 +333,9 @@ def _variant_ends(model: mujoco.MjModel, mesh_id: int,
     adr, n = model.mesh_vertadr[mesh_id], model.mesh_vertnum[mesh_id]
     verts = model.mesh_vert[adr:adr + 3 * n].reshape(-1, 3)
     a = SPAN_SMOOTH_ALPHA
-    rings = n // a
+    rings = (n - 2) // a      # _sweep_smooth appends ONE vertex per end cap
     g0 = verts[:a].mean(axis=0)
-    g1 = verts[-a:].mean(axis=0)
+    g1 = verts[(rings - 1) * a:rings * a].mean(axis=0)
     gmid = verts[(rings // 2) * a:(rings // 2 + 1) * a].mean(axis=0)
     ends = np.stack([g0, gmid, g1])
     return (r_gl @ ends.T).T + p_gl
@@ -432,7 +432,7 @@ def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
     # Tail dives into the lump interior so the free end hides inside.
     segs.append(np.array([[0.0, 0.001, 0.001], [-0.0005, 0.0015, 0.0005]]))
     pts = np.vstack(segs)
-    radius = 0.0028
+    radius = 0.0030
     verts, normals, uvs, faces = _sweep_smooth(pts, radius=radius)
     path_len = float(np.linalg.norm(np.diff(pts, axis=0), axis=1).sum())
     uvs[:, 0] *= path_len / (3.5 * 2.0 * radius)
@@ -638,10 +638,11 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         chord = float(np.linalg.norm(chord_vec))
         if chord < 1e-6:
             continue
-        # The rope's tip dives 3 mm PAST the rim into the knot coil's outer
-        # arc (coil tube Ø5.6 swallows the Ø5 shaft + end cap whole) — the
-        # rope visibly becomes the knot, no severed-looking tip.
-        back = EYE_RING_MAJOR + 0.003
+        # The rope's tip dives to the rim's surface (bin rounding moves it
+        # ±2.5 mm: worst case it retracts INTO the ring plate / hole, where
+        # the cap hides inside solid geometry; best case deep in the coil).
+        # The cap is NEVER exposed outside the knot — no severed-tip read.
+        back = EYE_RING_MAJOR + 0.0005
         chord_vec /= chord
         e0 = p0 + chord_vec * back
         e1 = p1 - chord_vec * back
