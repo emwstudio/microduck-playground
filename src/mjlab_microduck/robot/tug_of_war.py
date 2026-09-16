@@ -418,23 +418,20 @@ def _knot_path() -> np.ndarray:
                         np.zeros_like(t)], axis=1)
         return rot_y(pts, th)
 
-    # PRUSIK RING KNOT (普鲁士圆环结, from the user's reference photo): the
-    # rope bends OVER the bar's inner edge (visible contact), a gold strand
-    # spans the orange opening, and 3 coils wrap the strand PRESSED AGAINST
-    # THE BAR — the rim bar runs through the coil bundle (绑在圆环上, not
-    # floating in the hole). Slides free, locks under load.
+    # PRUSIK RING KNOT (普鲁士圆环结) — photo-literal: THREE COMPACT wraps
+    # encircling the bar (each loop passes over the rim and dips through the
+    # hole — the orange bar visibly threaded by gold rope), packed 0.35 rad
+    # apart so the bundle reads as ONE tight whipping sitting in the eye,
+    # standing rope exiting the bundle. Load path: pull -> wraps squeeze
+    # the bar -> ring -> duck.
     segs = [
-        np.array([[0.0100, 0.0, 0.0], [0.0070, 0.0, 0.0], [0.0040, 0.0, 0.0],
-                  [0.0020, 0.0, 0.0]]),
-        np.array([[0.0005, 0.0018, 0.0], [-0.0018, 0.0018, 0.0],   # over the bar
-                  [-0.0028, 0.0, 0.0],                            # INTO the hole
-                  [-0.0055, 0.0, 0.0]]),                          # strand spans it
+        np.array([[0.0100, 0.0, 0.0], [0.0070, 0.0, 0.0], [0.0045, 0.0, 0.0],
+                  [0.0025, 0.0, 0.0]]),                           # standing rope
+        loop(-0.0013, 0.0032, 0.0042, -0.35),
+        loop(-0.0013, 0.0032, 0.0042, 0.0),
+        loop(-0.0013, 0.0032, 0.0042, +0.35),
+        np.array([[-0.0015, -0.0020, -0.002], [-0.0022, -0.0025, -0.0035]]),
     ]
-    phi = np.linspace(np.pi, np.pi + 6.0 * np.pi, 43)             # 3 snug coils
-    helix = np.stack([-0.0055 + (phi - np.pi) / (6.0 * np.pi) * 0.0065,
-                      0.0046 * np.cos(phi), 0.0046 * np.sin(phi)], axis=1)
-    segs.append(helix)                          # coils bite the bar's section
-    segs.append(np.array([[-0.0035, -0.0020, -0.0010], [-0.0030, -0.0010, 0.0]]))
     return np.vstack(segs)
 
 
