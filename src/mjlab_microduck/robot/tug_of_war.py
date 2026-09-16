@@ -419,21 +419,22 @@ def _knot_path() -> np.ndarray:
         return rot_y(pts, th)
 
     # PRUSIK RING KNOT (普鲁士圆环结, from the user's reference photo): the
-    # standing rope threads the eye (U-turn visibly bending through the
-    # hole), then the working end coils 3 times AROUND THE STANDING ROPE —
-    # neat parallel wraps stacked along the shaft, with the ring's bar
-    # trapped inside the first coil. Slides free, locks under load.
+    # rope bends OVER the bar's inner edge and a gold strand visibly SPANS
+    # the orange opening (穿过孔洞), then the working end coils 3x around
+    # it (Ø10 bundle, 9 mm long — fills the eye and pops out of both plate
+    # faces like the reference), bar's inner edge trapped in the coils.
     segs = [
-        np.array([[0.0110, 0.0, 0.0], [0.0080, 0.0, 0.0], [0.0050, 0.0, 0.0]]),
-        np.array([[0.0030, 0.0015, 0.0], [-0.0005, 0.0018, 0.0],   # over the rim
-                  [-0.0030, 0.0, 0.0],                            # THROUGH the hole
-                  [-0.0020, -0.0020, 0.0], [0.0, -0.0025, 0.0]]), # U under the bar
+        np.array([[0.0100, 0.0, 0.0], [0.0070, 0.0, 0.0], [0.0040, 0.0, 0.0],
+                  [0.0020, 0.0, 0.0]]),
+        np.array([[0.0005, 0.0018, 0.0], [-0.0018, 0.0018, 0.0],   # over the bar
+                  [-0.0028, 0.0, 0.0],                            # INTO the hole
+                  [-0.0060, 0.0, 0.0]]),                          # strand spans it
     ]
-    phi = np.linspace(np.pi, np.pi + 6.0 * np.pi, 37)             # 3 snug coils
-    helix = np.stack([-0.001 + (phi - np.pi) / (6.0 * np.pi) * 0.006,
-                      0.0048 * np.cos(phi), 0.0048 * np.sin(phi)], axis=1)
-    segs.append(helix)
-    segs.append(np.array([[0.0040, -0.0020, -0.0010], [0.0045, -0.0010, 0.0]]))
+    phi = np.linspace(np.pi, np.pi + 6.0 * np.pi, 43)             # 3 snug coils
+    helix = np.stack([-0.0062 + (phi - np.pi) / (6.0 * np.pi) * 0.0067,
+                      0.0050 * np.cos(phi), 0.0050 * np.sin(phi)], axis=1)
+    segs.append(helix)                                            # bundle fills the eye
+    segs.append(np.array([[-0.0035, -0.0020, -0.0010], [-0.0030, -0.0010, 0.0]]))
     return np.vstack(segs)
 
 
