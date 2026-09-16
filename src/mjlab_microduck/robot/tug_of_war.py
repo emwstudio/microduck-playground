@@ -406,18 +406,36 @@ KNOT_MAJOR = 0.0045      # stopper-knot coil radius around the rope itself
 
 
 def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
-    """Lark's-head bight on the eye's near rim: ONE clean loop of rope in
-    the xy plane wrapping the rim section — inner strand threads the hole
-    along y (out one face, back the other: rope visibly THROUGH the ring),
-    outer strand wraps the plate's outside. The span rope ends into the
-    loop and vanishes — knot and rope are one.
+    """Chunky 3-turn coil wound around the eye's rim bar (knot frame: ring
+    centre at -EYE_RING_MAJOR on x, incoming span rope from +x). Each turn
+    threads the hole along y and wraps the plate's outside; successive turns
+    step around the rim arc like a real whipping. The span rope's tip dives
+    into the coil's outer arc and its end cap is swallowed whole (coil tube
+    Ø5.6 > rope Ø5) — no severed-looking tip anywhere. The coil's own free
+    end tucks into the lump's interior.
     """
-    t = np.linspace(0.0, 2.0 * np.pi, 41)
-    a, b = 0.007, 0.0045   # tight loop: its side strands (±4.5 mm) squeeze
-                           # the rope shaft (Ø5) against the rim bar
-    loop_pts = np.stack([a * np.cos(t), b * np.sin(t), np.zeros_like(t)], axis=1)
-    verts, normals, uvs, faces = _sweep_smooth(loop_pts)
-    uvs[:, 0] *= (2 * np.pi * a) / (3.5 * 2.0 * SPAN_RADIUS)
+    eye_c = np.array([-EYE_RING_MAJOR, 0.0, 0.0])
+    c0 = np.array([-0.001, 0.0, 0.0])        # wrap centre on the rim bar
+    a, b = 0.0045, 0.0035                    # hug the 2.5x2.5 mm bar section
+    t = np.linspace(0.0, 2.0 * np.pi, 33)
+    ellipse = np.stack([c0[0] + a * np.cos(t), b * np.sin(t),
+                        np.zeros_like(t)], axis=1)
+
+    def rot_y(pts: np.ndarray, th: float) -> np.ndarray:
+        c, s = np.cos(th), np.sin(th)
+        rot = np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
+        return (pts - eye_c) @ rot.T + eye_c
+
+    segs = [np.array([[0.0048, 0.0, 0.0], [0.0042, 0.0, 0.0]])]  # lead-in
+    for th in (-0.5, 0.0, 0.5):
+        segs.append(rot_y(ellipse, th))
+    # Tail dives into the lump interior so the free end hides inside.
+    segs.append(np.array([[0.0, 0.001, 0.001], [-0.0005, 0.0015, 0.0005]]))
+    pts = np.vstack(segs)
+    radius = 0.0028
+    verts, normals, uvs, faces = _sweep_smooth(pts, radius=radius)
+    path_len = float(np.linalg.norm(np.diff(pts, axis=0), axis=1).sum())
+    uvs[:, 0] *= path_len / (3.5 * 2.0 * radius)
     mesh = spec.add_mesh(name=name)
     mesh.uservert = verts.flatten().astype(np.float32)
     mesh.usernormal = normals.flatten().astype(np.float32)
@@ -437,6 +455,9 @@ def _add_knots(spec: mujoco.MjSpec, knot_use: list[tuple[str, str, float]], red:
             type=mujoco.mjtGeom.mjGEOM_MESH,
             meshname="tug_knot",
             pos=(eye[0] + sign * EYE_RING_MAJOR, 0.0, eye[2]),
+            # sign<0: mirror the coil 180° about y so its +x lead-in faces
+            # the incoming rope (the ±0.5 rad turn set is mirror-symmetric).
+            quat=(1.0, 0.0, 0.0, 0.0) if sign > 0 else (0.0, 0.0, 1.0, 0.0),
             material="tug_knot",
             contype=0,
             conaffinity=0,
@@ -445,7 +466,7 @@ def _add_knots(spec: mujoco.MjSpec, knot_use: list[tuple[str, str, float]], red:
 SPAN_SMOOTH_ALPHA = 16
 
 
-def _sweep_smooth(points: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def _sweep_smooth(points: np.ndarray, radius: float = SPAN_RADIUS) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Smooth cylinder swept along `points` (clean silhouette — the
     reference rope's twist is texture, not geometry; a 3-ply silhouette
     aliases into ragged fuzz at video resolution). (verts, normals, uvs, faces)"""
@@ -462,7 +483,7 @@ def _sweep_smooth(points: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarra
     cos_a = np.cos(alphas)[None, :, None]
     sin_a = np.sin(alphas)[None, :, None]
     normals = cos_a * u[:, None, :] + sin_a * w[:, None, :]      # (n, A, 3)
-    verts = points[:, None, :] + SPAN_RADIUS * normals
+    verts = points[:, None, :] + radius * normals
     verts = verts.reshape(-1, 3)
     normals = normals.reshape(-1, 3)
     uvs = np.zeros((n * SPAN_SMOOTH_ALPHA, 2))
@@ -617,10 +638,10 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         chord = float(np.linalg.norm(chord_vec))
         if chord < 1e-6:
             continue
-        # The rope's tip lands exactly ON the bight loop's outer arc tube
-        # (eye + EYE_MAJOR + loop_a, past the plate's outer edge) and merges
-        # into the knot — never floating in the loop's hollow centre.
-        back = EYE_RING_MAJOR + 0.007
+        # The rope's tip dives 3 mm PAST the rim into the knot coil's outer
+        # arc (coil tube Ø5.6 swallows the Ø5 shaft + end cap whole) — the
+        # rope visibly becomes the knot, no severed-looking tip.
+        back = EYE_RING_MAJOR + 0.003
         chord_vec /= chord
         e0 = p0 + chord_vec * back
         e1 = p1 - chord_vec * back
