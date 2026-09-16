@@ -315,6 +315,30 @@ class SpanVisual:
     local_b: np.ndarray
     nominal: float
     variant_mesh_ids: np.ndarray
+    # (C, S, 3, 3): per variant, centerline centroids [g0, gmid, g1] in the
+    # mocap BODY frame (compiled mesh verts folded through the geom's local
+    # pos/quat — see _variant_ends). Mocap placement is solved against these
+    # so the rendered rope tips land exactly on the wrap points.
+    variant_ends: np.ndarray
+
+
+def _variant_ends(model: mujoco.MjModel, mesh_id: int,
+                  p_gl: np.ndarray, r_gl: np.ndarray) -> np.ndarray:
+    """Centerline centroids [g0, gmid, g1] of a span variant in the mocap
+    BODY frame. Render chain: body pose ∘ geom-local ∘ compiled verts —
+    MuJoCo re-centres user meshes to their principal inertia frame at
+    compile time and bakes the offset of the ORIGINAL mesh (tug_var_5_1)
+    into the geom's local pos/quat, so both transforms must be folded in.
+    """
+    adr, n = model.mesh_vertadr[mesh_id], model.mesh_vertnum[mesh_id]
+    verts = model.mesh_vert[adr:adr + 3 * n].reshape(-1, 3)
+    a = SPAN_SMOOTH_ALPHA
+    rings = n // a
+    g0 = verts[:a].mean(axis=0)
+    g1 = verts[-a:].mean(axis=0)
+    gmid = verts[(rings // 2) * a:(rings // 2 + 1) * a].mean(axis=0)
+    ends = np.stack([g0, gmid, g1])
+    return (r_gl @ ends.T).T + p_gl
 
 
 def resolve_rope_visuals(model: mujoco.MjModel, n_per_team: int,
@@ -331,6 +355,13 @@ def resolve_rope_visuals(model: mujoco.MjModel, n_per_team: int,
              for si in range(len(SAG_BINS))]
             for ci in range(len(CHORD_BINS))
         ])
+        p_gl = model.geom_pos[geom_id].copy()
+        r_gl = np.zeros(9)
+        mujoco.mju_quat2Mat(r_gl, model.geom_quat[geom_id])
+        r_gl = r_gl.reshape(3, 3)
+        ends = np.array([[ _variant_ends(model, int(variant_ids[ci, si]), p_gl, r_gl)
+                           for si in range(len(SAG_BINS))]
+                         for ci in range(len(CHORD_BINS))])
         site_a, site_b = _span_hook_sites(pa, pb, red)
         team_a = "red" if pa in red else "blue"
         team_b = "red" if pb in red else "blue"
@@ -343,6 +374,7 @@ def resolve_rope_visuals(model: mujoco.MjModel, n_per_team: int,
             local_b=(ring_local(team_b) if site_b == "rope_hook" else chest_local(team_b)).copy(),
             nominal=(gap if pa == red[0] else spacing),
             variant_mesh_ids=variant_ids,
+            variant_ends=ends,
         ))
     return spans
 
@@ -381,7 +413,8 @@ def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
     loop and vanishes — knot and rope are one.
     """
     t = np.linspace(0.0, 2.0 * np.pi, 41)
-    a, b = 0.007, 0.0075
+    a, b = 0.007, 0.0045   # tight loop: its side strands (±4.5 mm) squeeze
+                           # the rope shaft (Ø5) against the rim bar
     loop_pts = np.stack([a * np.cos(t), b * np.sin(t), np.zeros_like(t)], axis=1)
     verts, normals, uvs, faces = _sweep_smooth(loop_pts)
     uvs[:, 0] *= (2 * np.pi * a) / (3.5 * 2.0 * SPAN_RADIUS)
@@ -584,10 +617,10 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         chord = float(np.linalg.norm(chord_vec))
         if chord < 1e-6:
             continue
-        # The rope's end disappears INTO the bight loop on the rim (pull
-        # each end back from the site by EYE_MAJOR so the tip tucks into
-        # the knot, never sticking out past it).
-        back = EYE_RING_MAJOR
+        # The rope's tip lands exactly ON the bight loop's outer arc tube
+        # (eye + EYE_MAJOR + loop_a, past the plate's outer edge) and merges
+        # into the knot — never floating in the loop's hollow centre.
+        back = EYE_RING_MAJOR + 0.007
         chord_vec /= chord
         e0 = p0 + chord_vec * back
         e1 = p1 - chord_vec * back
@@ -598,22 +631,34 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         ci = int(np.argmin(np.abs(CHORD_BINS - span_len)))
         si = int(np.argmin(np.abs(np.array(SAG_BINS) * SAG_MAX - sag)))
         model.geom_dataid[span.geom_id] = span.variant_mesh_ids[ci, si]
-        # Mocap frame: x along the chord; local +z as close to world-UP as
-        # the chord allows, so the baked sag (local -z) points DOWN.
-        # (The previous mapping put z_axis = down, which flipped the baked
-        # sag skyward — invisible in taut match footage, obvious at slack.)
+        # Solve the mocap frame against the COMPILED mesh verts (renderer
+        # draws them as-is in the geom frame): place g0 exactly on e0, the
+        # g0->g1 axis along the span, and the baked sag pointing world-DOWN.
+        g0, gmid, g1 = span.variant_ends[ci, si]
         x_axis = span_vec / span_len
         up = np.array([0.0, 0.0, 1.0])
-        z_axis = up - np.dot(up, x_axis) * x_axis
-        zn = np.linalg.norm(z_axis)
-        z_axis = z_axis / zn if zn > 1e-6 else np.array([0.0, 0.0, 1.0])
-        y_axis = np.cross(z_axis, x_axis)
-        rot[0::3] = x_axis
-        rot[1::3] = y_axis
-        rot[2::3] = z_axis
+        down = np.dot(up, x_axis) * x_axis - up     # world-down, perp to span
+        dn = np.linalg.norm(down)
+        down = down / dn if dn > 1e-6 else np.array([0.0, 0.0, -1.0])
+        ex_w = x_axis
+        ez_w = down
+        ey_w = np.cross(ez_w, ex_w)
+        ex_g = g1 - g0
+        ex_g /= np.linalg.norm(ex_g)
+        ez_g = gmid - (g0 + g1) / 2.0
+        ez_g = ez_g - np.dot(ez_g, ex_g) * ex_g
+        zn = np.linalg.norm(ez_g)
+        ez_g = ez_g / zn if zn > 1e-6 else np.array([0.0, 0.0, -1.0])
+        ey_g = np.cross(ez_g, ex_g)
+        b_w = np.column_stack([ex_w, ey_w, ez_w])
+        b_g = np.column_stack([ex_g, ey_g, ez_g])
+        r_mat = b_w @ b_g.T
+        rot[:] = r_mat.flatten()
         mujoco.mju_mat2Quat(quat, rot)
         mocap_id = model.body_mocapid[span.body_id]
-        data.mocap_pos[mocap_id] = (e0 + e1) / 2.0
+        # Align chord midpoints so the bin-rounding error (≤5 mm) splits
+        # symmetrically into the two knots instead of one tip overshooting.
+        data.mocap_pos[mocap_id] = (e0 + e1) / 2.0 - r_mat @ ((g0 + g1) / 2.0)
         data.mocap_quat[mocap_id] = quat
 
 
