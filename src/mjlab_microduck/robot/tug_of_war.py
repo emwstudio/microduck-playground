@@ -415,20 +415,28 @@ def _knot_mesh(spec: mujoco.MjSpec, name: str = "tug_knot") -> None:
     end tucks into the lump's interior.
     """
     eye_c = np.array([-EYE_RING_MAJOR, 0.0, 0.0])
-    c0 = np.array([-0.001, 0.0, 0.0])        # wrap centre on the rim bar
-    a, b = 0.0045, 0.0035                    # hug the 2.5x2.5 mm bar section
-    t = np.linspace(0.0, 2.0 * np.pi, 33)
-    ellipse = np.stack([c0[0] + a * np.cos(t), b * np.sin(t),
-                        np.zeros_like(t)], axis=1)
 
     def rot_y(pts: np.ndarray, th: float) -> np.ndarray:
         c, s = np.cos(th), np.sin(th)
         rot = np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
         return (pts - eye_c) @ rot.T + eye_c
 
-    segs = [np.array([[0.0048, 0.0, 0.0], [0.0042, 0.0, 0.0]])]  # lead-in
-    for th in (-0.5, 0.0, 0.5):
-        segs.append(rot_y(ellipse, th))
+    def loop(cx: float, a: float, b: float, th: float) -> np.ndarray:
+        t = np.linspace(0.0, 2.0 * np.pi, 33)
+        pts = np.stack([cx + a * np.cos(t), b * np.sin(t),
+                        np.zeros_like(t)], axis=1)
+        return rot_y(pts, th)
+
+    # THREE turns wrapping the bar FROM INSIDE THE HOLE: turn centres sit
+    # 3 mm inside the hole (r=5 mm from the ring centre), loops encircle the
+    # rim bar (hole-side arc r≈0.5, outer arc r≈9.5) and bulge ±4 mm out of
+    # both plate faces — the knot PLUGS the orange hole. That plugged-hole
+    # silhouette is what reads as "套在环上" from the face-on match camera
+    # (strands threading the hole run along its axis = invisible dots).
+    segs = [np.array([[0.0050, 0.0, 0.0], [0.0030, 0.0, 0.0]]),   # lead-in
+            loop(-0.0030, 0.0045, 0.0040, -0.40),
+            loop(-0.0030, 0.0045, 0.0040, 0.0),
+            loop(-0.0030, 0.0045, 0.0040, +0.40)]
     # Tail dives into the lump interior so the free end hides inside.
     segs.append(np.array([[0.0, 0.001, 0.001], [-0.0005, 0.0015, 0.0005]]))
     pts = np.vstack(segs)
