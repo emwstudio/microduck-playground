@@ -418,30 +418,28 @@ def _knot_path() -> np.ndarray:
                         np.zeros_like(t)], axis=1)
         return rot_y(pts, th)
 
-    # U-WRAP THROUGH THE EYE (per the user's sketch): the rope dives through
-    # the hole channel, turns 180° AROUND THE BAR'S INNER EDGE behind the
-    # plate, and comes back out — two gold strands through the orange hole
-    # with the bar's edge pinched between them (咬在孔洞上) — then the tail
-    # coils around the standing rope (the ∏ in the sketch).
-    segs = [
-        # tail tip hidden in the coil zone, then coils around the rope
-    ]
-    phi = np.linspace(np.pi, np.pi + 4.0 * np.pi, 29)
-    segs.append(np.stack([0.0100 - (phi - np.pi) / (4.0 * np.pi) * 0.0050,
-                          0.0042 * np.cos(phi), 0.0042 * np.sin(phi)], axis=1))
+    # ARROW PATH (per the user's second sketch): the rope arrives LOW, wraps
+    # around the bar's bottom-right inner edge (visible 90° bend), rises
+    # THROUGH the hole (vertical strand in the opening — the arrow), exits
+    # over the top bar, and the tail coils around the standing rope. The
+    # ring is captured in the rope's wrap — 系在孔洞上.
+    segs = []
+    phi = np.linspace(np.pi, np.pi + 4.0 * np.pi, 29)         # tail coils
+    segs.append(np.stack([0.0095 - (phi - np.pi) / (4.0 * np.pi) * 0.0050,
+                          0.0042 * np.cos(phi),
+                          -0.0030 + 0.0042 * np.sin(phi)], axis=1))
     segs += [
-        np.array([[0.0035, 0.0010, -0.0010], [0.0015, 0.0018, -0.0005],
-                  [0.0005, 0.0020, 0.0]]),                        # toward the U
-        np.array([[-0.0015, 0.0022, 0.0008], [-0.0035, 0.0018, 0.001],
-                  [-0.0045, 0.0, 0.001],                          # INTO the channel
-                  [-0.0048, -0.0020, 0.0005], [-0.0045, -0.0022, -0.0015],
-                  [-0.0040, -0.0020, -0.0030],                    # around the bar edge
-                  [-0.0040, 0.0, -0.0030],                        # back THROUGH
-                  [-0.0042, 0.0018, -0.0028]]),                   # out the front
-        np.array([[-0.0030, 0.0022, -0.0020], [-0.0010, 0.0020, -0.0010],
-                  [0.0010, 0.0012, 0.0], [0.0030, 0.0005, 0.0]]), # back to the rope
-        np.array([[0.0050, 0.0, 0.0], [0.0070, 0.0, 0.0], [0.0100, 0.0, 0.0],
-                  [0.0125, 0.0, 0.0]]),                           # standing rope
+        np.array([[0.0040, 0.0015, -0.0018], [0.0025, 0.0020, -0.0005],
+                  [0.0010, 0.0022, 0.0015]]),                   # up the rim outside
+        np.array([[-0.0008, 0.0020, 0.0035], [-0.0025, 0.0012, 0.0045],
+                  [-0.0032, 0.0, 0.0042],                       # over the top bar
+                  [-0.0030, -0.0015, 0.0035]]),
+        np.array([[-0.0032, -0.0018, 0.0020], [-0.0030, -0.0015, 0.0005],
+                  [-0.0025, -0.0010, -0.0010]]),                # down through hole
+        np.array([[-0.0015, -0.0018, -0.0025], [0.0, -0.0020, -0.0030],
+                  [0.0015, -0.0012, -0.0030]]),                 # bottom edge wrap
+        np.array([[0.0035, 0.0, -0.0030], [0.0060, 0.0, -0.0022],
+                  [0.0090, 0.0, -0.0010], [0.0120, 0.0, 0.0]]), # lead-in to span
     ]
     return np.vstack(segs)
 
