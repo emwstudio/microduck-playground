@@ -382,7 +382,7 @@ def _site_world(data: mujoco.MjData, body_id: int, local: np.ndarray,
 
 
 SPAN_RADIUS = 0.0025   # Ø5 mm rope — slim, threads the Ø11 mm holes with room
-KNOT_RADIUS = 0.0026   # knot tube: 0.1 mm fatter — swallows the rope, no z-fight
+KNOT_RADIUS = 0.0028   # knot tube: fatter — fills the eye, swallows the rope
 
 EYE_RING_MAJOR = 0.008   # pad-eye ring radius (mirrors hardware/tug-rig/cad_collar.py EYE_MAJOR)
 EYE_INNER_R = 0.0055     # pad-eye hole radius (EYE_MAJOR - EYE_TUBE)
@@ -412,10 +412,10 @@ def _knot_path() -> np.ndarray:
         rot = np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
         return (pts - eye_c) @ rot.T + eye_c
 
-    def loop(cx: float, a: float, b: float, th: float, dy: float = -0.002) -> np.ndarray:
-        # dy: sink the coil INTO the eye's passage (away from the camera)
-        # and cx deeper toward the hole centre — the knot reads as tied
-        # INTO the hole, gripping the bar from inside.
+    def loop(cx: float, a: float, b: float, th: float, dy: float = 0.0) -> np.ndarray:
+        # dy=0: keep the coil IN the plate plane so it stays visible through
+        # the hole (sinking -y hides it behind the plate's near face and the
+        # eye reads EMPTY). cx deep toward the hole centre = 系在孔上.
         t = np.linspace(0.0, 2.0 * np.pi, 33)[:-1]   # periodic, no duplicate
         pts = np.stack([cx + a * np.cos(t), dy + b * np.sin(t),
                         np.zeros_like(t)], axis=1)
