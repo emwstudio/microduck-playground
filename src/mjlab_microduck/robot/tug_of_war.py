@@ -418,19 +418,30 @@ def _knot_path() -> np.ndarray:
                         np.zeros_like(t)], axis=1)
         return rot_y(pts, th)
 
-    # PRUSIK RING KNOT (普鲁士圆环结) — photo-literal: THREE COMPACT wraps
-    # encircling the bar (each loop passes over the rim and dips through the
-    # hole — the orange bar visibly threaded by gold rope), packed 0.35 rad
-    # apart so the bundle reads as ONE tight whipping sitting in the eye,
-    # standing rope exiting the bundle. Load path: pull -> wraps squeeze
-    # the bar -> ring -> duck.
+    # U-WRAP THROUGH THE EYE (per the user's sketch): the rope dives through
+    # the hole channel, turns 180° AROUND THE BAR'S INNER EDGE behind the
+    # plate, and comes back out — two gold strands through the orange hole
+    # with the bar's edge pinched between them (咬在孔洞上) — then the tail
+    # coils around the standing rope (the ∏ in the sketch).
     segs = [
-        np.array([[0.0100, 0.0, 0.0], [0.0070, 0.0, 0.0], [0.0045, 0.0, 0.0],
-                  [0.0025, 0.0, 0.0]]),                           # standing rope
-        loop(-0.0013, 0.0032, 0.0042, -0.35),
-        loop(-0.0013, 0.0032, 0.0042, 0.0),
-        loop(-0.0013, 0.0032, 0.0042, +0.35),
-        np.array([[-0.0015, -0.0020, -0.002], [-0.0022, -0.0025, -0.0035]]),
+        # tail tip hidden in the coil zone, then coils around the rope
+    ]
+    phi = np.linspace(np.pi, np.pi + 4.0 * np.pi, 29)
+    segs.append(np.stack([0.0100 - (phi - np.pi) / (4.0 * np.pi) * 0.0050,
+                          0.0042 * np.cos(phi), 0.0042 * np.sin(phi)], axis=1))
+    segs += [
+        np.array([[0.0035, 0.0010, -0.0010], [0.0015, 0.0018, -0.0005],
+                  [0.0005, 0.0020, 0.0]]),                        # toward the U
+        np.array([[-0.0015, 0.0022, 0.0008], [-0.0035, 0.0018, 0.001],
+                  [-0.0045, 0.0, 0.001],                          # INTO the channel
+                  [-0.0048, -0.0020, 0.0005], [-0.0045, -0.0022, -0.0015],
+                  [-0.0040, -0.0020, -0.0030],                    # around the bar edge
+                  [-0.0040, 0.0, -0.0030],                        # back THROUGH
+                  [-0.0042, 0.0018, -0.0028]]),                   # out the front
+        np.array([[-0.0030, 0.0022, -0.0020], [-0.0010, 0.0020, -0.0010],
+                  [0.0010, 0.0012, 0.0], [0.0030, 0.0005, 0.0]]), # back to the rope
+        np.array([[0.0050, 0.0, 0.0], [0.0070, 0.0, 0.0], [0.0100, 0.0, 0.0],
+                  [0.0125, 0.0, 0.0]]),                           # standing rope
     ]
     return np.vstack(segs)
 
