@@ -24,6 +24,7 @@ from mjlab_microduck.robot.tug_of_war import (
     DEFAULT_POSE,
     DUCK_SPACING,
     MIN_FALLEN,
+    ROPE_SLACK,
     TRUNK_Z0,
     WIN_X,
     apply_actions,
@@ -86,6 +87,12 @@ def main() -> None:
                         help="red-team policy ONNX (defaults to --policy)")
     parser.add_argument("--policy-blue", default=None,
                         help="blue-team policy ONNX (defaults to --policy)")
+    parser.add_argument("--red-kind", choices=["walk", "tug"], default="walk",
+                        help="walk: velocity-commanded policy (vx=pull speed); "
+                             "tug: self-directed pull policy (vx zeroed — trained "
+                             "with a zero-padded twist slot, a real vx is OOD)")
+    parser.add_argument("--blue-kind", choices=["walk", "tug"], default="walk",
+                        help="same as --red-kind, for the blue team")
     parser.add_argument("--n-per-team", type=int, default=5)
     parser.add_argument("--rounds", type=int, default=5)
     parser.add_argument("--round-duration", type=float, default=15.0)
@@ -98,6 +105,11 @@ def main() -> None:
     parser.add_argument("--win-x", type=float, default=0.18)
     parser.add_argument("--spacing", type=float, default=DUCK_SPACING)
     parser.add_argument("--gap", type=float, default=CENTER_GAP)
+    parser.add_argument("--pretension", type=float, default=0.015,
+                        help="spawn each link this far past its taut length so the "
+                             "rope carries tension from t=0 (the tug training env's "
+                             "sled rope starts taut; a slack match start lets "
+                             "lean-back policies topple before tension builds)")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--foot-friction", type=float, default=2.0,
                         help="foot sliding friction mu; sim default ~1.0 lets the rope "
@@ -125,7 +137,10 @@ def main() -> None:
     model = spec.compile()
     data = mujoco.MjData(model)
     rigs = find_duck_rigs(model, args.n_per_team)
-    spawns = duck_spawns(args.n_per_team, args.spacing, args.gap)
+    # Spawn each link slightly past its taut length (cord = nominal + ROPE_SLACK)
+    # so the chain carries tension from t=0 like the training sled rope does.
+    pret = ROPE_SLACK + args.pretension
+    spawns = duck_spawns(args.n_per_team, args.spacing + pret, args.gap + pret)
     if args.foot_friction > 0:
         foot_geoms = [i for i in range(model.ngeom)
                       if "foot" in (mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, i) or "")]
@@ -178,8 +193,16 @@ def main() -> None:
         steps = int(args.round_duration / control_dt)
         step = 0
         t_start = time.time()
+        kinds = {"red": args.red_kind, "blue": args.blue_kind}
         while step < steps:
-            obs = compute_obs(model, data, rigs, pull_speeds)
+            # Tug-style policies are self-directed: their twist slot was
+            # zero-padded in training, so feeding a real pull speed is OOD
+            # and topples them instantly. Zero the command for those ducks.
+            cmd_speeds = np.array([
+                0.0 if kinds[rig.team] == "tug" else pull_speeds[k]
+                for k, rig in enumerate(rigs)
+            ])
+            obs = compute_obs(model, data, rigs, cmd_speeds)
             if not np.isfinite(obs).all():
                 winner, reason = "draw", "NaN in observations"
                 break
