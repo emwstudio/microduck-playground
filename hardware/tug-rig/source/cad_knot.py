@@ -102,51 +102,14 @@ def clear_collar(knot: trimesh.Trimesh, side: float,
 
 
 def path_uvs(mesh: trimesh.Trimesh, pts: np.ndarray) -> np.ndarray:
-    """Sweep-style UVs: u = arclength along the knot path (one texture tile
-    per 17.5 mm = the rope's twist pitch), v = angle around the local path
-    tangent — the same mapping the span sweep uses, so knot and rope carry
-    the SAME twist flow (圆柱映射的轴向条纹一眼假)."""
-    # arclength table and per-segment tangents
-    seg = np.diff(pts, axis=0)
-    seglen = np.linalg.norm(seg, axis=1)
-    tan = seg / seglen[:, None]
-    arc = np.concatenate([[0.0], np.cumsum(seglen)])
-    v = mesh.vertices                  # knot is built in mm, as is the path
-    u_out = np.zeros(len(v))
-    ang_out = np.zeros(len(v))
-    # nearest point on the path per vertex (chunked to bound memory)
-    # parallel-transport frames along the path — a fixed reference flips on
-    # the helix and scrambles the v angle into ribs (线圈束竖条纹)
-    tangents = np.gradient(pts, axis=0)
-    tangents /= np.linalg.norm(tangents, axis=1, keepdims=True)
-    ref = np.array([0.0, 0.0, 1.0])
-    if abs(tangents[0] @ ref) > 0.9:
-        ref = np.array([1.0, 0.0, 0.0])
-    e1_path = np.zeros_like(pts)
-    e1_path[0] = ref - (ref @ tangents[0]) * tangents[0]
-    e1_path[0] /= np.linalg.norm(e1_path[0])
-    for i in range(1, len(pts)):
-        e1_path[i] = e1_path[i - 1] - (e1_path[i - 1] @ tangents[i]) * tangents[i]
-        un = np.linalg.norm(e1_path[i])
-        e1_path[i] = e1_path[i - 1] if un < 1e-9 else e1_path[i] / un
-    e2_path = np.cross(tangents, e1_path)
-    for lo in range(0, len(v), 20000):
-        p = v[lo:lo + 20000]
-        # distance to each segment: project, clamp, measure
-        ap = p[:, None, :] - pts[None, :-1, :]                  # (P, S, 3)
-        tpar = np.einsum("psj,sj->ps", ap, tan) / seglen[None, :]
-        tpar = np.clip(tpar, 0.0, 1.0)
-        closest = pts[None, :-1, :] + tpar[:, :, None] * seg[None, :, :]
-        d2 = ((p[:, None, :] - closest) ** 2).sum(axis=2)
-        best = d2.argmin(axis=1)
-        u_out[lo:lo + 20000] = (arc[best] + tpar[np.arange(len(p)), best]
-                                * seglen[best])
-        off = p - closest[np.arange(len(p)), best]
-        # angle around the tangent in the path's parallel-transport frame
-        a = np.arctan2((off * e2_path[best]).sum(axis=1),
-                       (off * e1_path[best]).sum(axis=1))
-        ang_out[lo:lo + 20000] = a
-    return np.stack([u_out / 17.5, ang_out / (2.0 * np.pi)], axis=1)
+    """SPATIAL UVs: u = vertex x / 17.5 mm (the rope's twist pitch), v =
+    angle around the x axis — the same direction and density as the span
+    rope's twist, so knot and rope read as ONE material. Arclength mapping
+    (previous version) compresses the texture 3-4x on the coils."""
+    v = mesh.vertices                  # knot is built in mm
+    u = v[:, 0] / 17.5
+    ang = np.arctan2(v[:, 2], v[:, 1]) / (2.0 * np.pi)
+    return np.stack([u, ang], axis=1)
 
 
 def export_both(mesh: trimesh.Trimesh, name: str, uv: np.ndarray) -> None:
