@@ -266,9 +266,9 @@ def _add_rig_materials(spec: mujoco.MjSpec) -> None:
     steel.shininess = 0.7
     knot_tex = spec.add_material(name="tug_knot_tex")   # tone-matched below
     orange = spec.add_material(name="tug_carabiner")
-    orange.rgba = (0.92, 0.42, 0.08, 1.0)   # anodized-orange carabiner
-    orange.specular = 0.85
-    orange.shininess = 0.6
+    orange.rgba = (0.65, 1.0, 0.02, 1.0)   # fluorescent lime candy paint — 炸
+    orange.specular = 0.9
+    orange.shininess = 0.8
 
 
 def _load_hook_stls(spec: mujoco.MjSpec) -> None:
