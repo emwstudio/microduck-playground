@@ -100,7 +100,14 @@ def export_both(mesh: trimesh.Trimesh, name: str) -> None:
     m = mesh.copy()
     m.apply_scale(0.001)
     m.export(ASSETS / f"{name}.stl")
-    m.export(OUT / f"{name}_m.stl")
+    # OBJ with cylindrical UVs so the sim can use the rope's own twist
+    # texture on the knot — STL carries no UVs and the untextured solid
+    # read as flat doodle-brown next to the hemp rope.
+    uv = np.stack([m.vertices[:, 0] / 0.0175,   # twist pitch ≈ 3.5 rope
+                   np.arctan2(m.vertices[:, 2], m.vertices[:, 1])  # diameters,
+                   / (2.0 * np.pi)], axis=1)                      # as the span
+    m.visual = trimesh.visual.TextureVisuals(uv=uv)
+    m.export(ASSETS / f"{name}.obj", include_texture=True)
 
 
 def main() -> None:

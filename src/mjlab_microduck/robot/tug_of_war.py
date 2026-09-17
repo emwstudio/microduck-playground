@@ -253,21 +253,14 @@ def _add_rig_materials(spec: mujoco.MjSpec) -> None:
     orange.rgba = (0.92, 0.42, 0.08, 1.0)   # anodized-orange carabiner
     orange.specular = 0.85
     orange.shininess = 0.6
-    knot = spec.add_material(name="tug_knot")
-    knot.rgba = (0.78, 0.69, 0.50, 1.0)   # matte hemp — matches the rope's
-                                          # average tone WITHOUT the white
-                                          # specular the smooth CAD solid
-                                          # used to throw (渲染发白)
-    knot.specular = 0.08
-    knot.shininess = 0.15
 
 
 def _load_hook_stls(spec: mujoco.MjSpec) -> None:
     """Parametric rig parts from hardware/tug-rig (STL, trunk-local)."""
     for mesh_name, filename in (("tug_collar_stl", "tug_collar.stl"),
                                 ("tug_clamp_screw_stl", "tug_clamp_screw.stl"),
-                                ("tug_knot_stl", "tug_knot.stl"),
-                                ("tug_knot_mir_stl", "tug_knot_mir.stl")):
+                                ("tug_knot_stl", "tug_knot.obj"),
+                                ("tug_knot_mir_stl", "tug_knot_mir.obj")):
         spec.add_mesh(name=mesh_name, file=str(_ROBOT_DIR / "assets" / filename))
 
 
@@ -293,7 +286,8 @@ def _add_knots(spec: mujoco.MjSpec, n_per_team: int) -> None:
             type=mujoco.mjtGeom.mjGEOM_MESH,
             meshname="tug_knot_stl" if sign > 0 else "tug_knot_mir_stl",
             pos=(eye[0] + sign * EYE_RING_MAJOR, 0.0, eye[2]),
-            material="tug_knot",
+            material="tug_twist",   # the rope's own twist texture — the knot
+                                    # and the span read as ONE rope
             contype=0,
             conaffinity=0,
             density=0.0,
