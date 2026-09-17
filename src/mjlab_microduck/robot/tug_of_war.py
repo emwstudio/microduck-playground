@@ -217,8 +217,9 @@ def _add_twist_material(spec: mujoco.MjSpec) -> None:
     # Knot twin: SAME twist colour texture as the rope (path-swept UVs), no
     # normal map (its ridges burr on the coils), tone pulled down slightly
     # for the blob's light catch.
-    kmat = next(m for m in spec.materials if m.name == "tug_knot_tex")
-    kmat.rgba = (0.58, 0.56, 0.50, 1.0)
+    kmat = next((m for m in spec.materials if m.name == "tug_knot_tex"),
+                None) or spec.add_material(name="tug_knot_tex")
+    kmat.rgba = (0.48, 0.46, 0.42, 1.0)
     kmat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = "tug_twist_tex"
     # normal map back ON: the rope's groove shading is half its tone — the
     # smooth-geometry knot reads cream-bright without it. Geometry is smooth
