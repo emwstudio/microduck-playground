@@ -46,14 +46,21 @@ def knot_path(mirror: bool = False) -> np.ndarray:
     if mirror:
         pts = pts.copy()
         pts[:, 0] *= -1.0
-    # densify to ~0.8 mm steps so capsule unions are crease-free
+    # densify to ~0.3 mm steps, then moving-average the polyline — capsule
+    # unions ripple at every micro-kink otherwise (结面毛刺)
     dense = [pts[0]]
     for a, b in zip(pts[:-1], pts[1:]):
         d = float(np.linalg.norm(b - a))
-        for s in np.linspace(0.0, 1.0, max(2, int(d / 0.3)), endpoint=False)[1:]:
-            dense.append(a + s * (b - a))
+        for s_ in np.linspace(0.0, 1.0, max(2, int(d / 0.3)), endpoint=False)[1:]:
+            dense.append(a + s_ * (b - a))
         dense.append(b)
-    return np.array(dense)
+    pts = np.array(dense)
+    kernel = np.ones(9) / 9.0
+    padded = np.vstack([np.repeat(pts[[0]], 4, axis=0), pts,
+                        np.repeat(pts[[-1]], 4, axis=0)])
+    pts = np.apply_along_axis(lambda c: np.convolve(c, kernel, mode="valid"),
+                              0, padded)
+    return pts
 
 
 def build(mirror: bool = False) -> trimesh.Trimesh:
@@ -145,6 +152,12 @@ def path_uvs(mesh: trimesh.Trimesh, pts: np.ndarray) -> np.ndarray:
 def export_both(mesh: trimesh.Trimesh, name: str, uv: np.ndarray) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     ASSETS.mkdir(parents=True, exist_ok=True)
+    # Weld identical vertices so MuJoCo smooth-shades across facet edges —
+    # the boolean output kept duplicated verts and rendered as visible
+    # pixel-block facets next to the smooth rope.
+    mesh.merge_vertices(merge_tex=False)
+    mesh = mesh.smooth_shaded   # property: returns the smooth-shaded copy
+
     mesh.export(OUT / f"{name}_mm.stl")
     m = mesh.copy()
     m.apply_scale(0.001)
