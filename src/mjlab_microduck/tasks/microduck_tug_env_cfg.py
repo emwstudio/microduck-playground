@@ -195,6 +195,15 @@ def make_microduck_tug_env_cfg(
             "max_speed": PULL_SPEED_CAP_STEADY if steady else PULL_SPEED_CAP_SHUFFLE,
         },
     )
+    # Survival under load (v3): pays per step ONLY while the rope is taut and
+    # the trunk is up — v2's burst-pull-then-die rounds lasted ~2 s; a 10 s
+    # grind must out-pay a 1.5 s sprint. Weight 0.3/step ≈ progress mass, so
+    # staying alive through the pull beats a kamikaze yank.
+    cfg.rewards["tug_taut_alive"] = RewardTermCfg(
+        func=microduck_mdp.tug_taut_alive,
+        weight=0.3,
+        params={"taut_length": ROPE_TAUT_LENGTH},
+    )
 
     # ── Rewards: gait style (the ONLY differences between the recipes) ──────
     # Both style terms are GATED on cart motion inside the mdp funcs (×0 when
