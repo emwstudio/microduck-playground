@@ -60,7 +60,7 @@ CART_GAP_RANGE = (CART_GAP_NOMINAL - CART_GAP_DR, CART_GAP_NOMINAL + CART_GAP_DR
 _HOOK_DZ = 0.10               # butt-hook height (~0.14) minus cart-eye height (0.04)
 ROPE_TAUT_LENGTH = math.hypot(CART_GAP_NOMINAL, _HOOK_DZ) + ROPE_SLACK
 
-CART_MASS_SCALE_RANGE = (0.8, 1.25)    # 2.4–3.75 kg
+CART_MASS_SCALE_RANGE = (0.8, 2.0)      # 2.4–6.0 kg — learn to pull a load that does NOT give
 CART_FRICTION_SCALE_RANGE = (0.7, 1.4)  # mu 0.105–0.21 → 3.1–6.2 N drag at 3 kg
 
 # Task reward shaping
@@ -162,6 +162,12 @@ def make_microduck_tug_env_cfg(
         "foot_clearance",
         "foot_swing_height",
         "upright",  # replaced by tug_trunk_lean_tracking (a puller leans)
+        # pose pays joints-near-HOME whenever the (here ~zero) command is zero:
+        # a ~0.76/step do-nothing jackpot that dwarfs the task stack AND taxes
+        # the walking legs a pull needs — the v1 trials farmed exactly this
+        # (leaned/posed, cart never moved). Remove it; head_pose_tracking at
+        # weight 2.0 still pins the counterweight head.
+        "pose",
     ]:
         cfg.rewards.pop(name, None)
 
@@ -178,7 +184,9 @@ def make_microduck_tug_env_cfg(
         weight=500.0,
         params={"max_paid_rate": PROGRESS_MAX_PAID_RATE},
     )
-    # Taut-rope pull speed (small on top of progress; shuffle pays it more).
+    # Taut-rope pull speed = the CART's speed under a taut rope (v2: v1 paid
+    # robot speed and was farmed by stretching the stiff rope while the cart
+    # sat still). Small on top of progress; shuffle pays it more.
     cfg.rewards["tug_taut_pull_speed"] = RewardTermCfg(
         func=microduck_mdp.tug_taut_rope_pull_speed,
         weight=2.0 if steady else 4.0,
@@ -189,6 +197,8 @@ def make_microduck_tug_env_cfg(
     )
 
     # ── Rewards: gait style (the ONLY differences between the recipes) ──────
+    # Both style terms are GATED on cart motion inside the mdp funcs (×0 when
+    # the cart sits still) — ungated style rewards get farmed as pure posing.
     cfg.rewards["tug_trunk_lean"] = RewardTermCfg(
         func=microduck_mdp.tug_trunk_lean_tracking,
         weight=1.5,

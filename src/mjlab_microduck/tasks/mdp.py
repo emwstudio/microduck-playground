@@ -8682,6 +8682,27 @@ def reset_tug_cart(
     pull_dir[env_ids, 1] = sin_y
 
 
+def _tug_cart_pull_vel(env: ManagerBasedRlEnv, cart_asset: str = "cart") -> torch.Tensor:
+    """Cart velocity along the frozen pull direction, signed (m/s). NaN-safe."""
+    cart: Entity = env.scene[cart_asset]
+    vel_xy = torch.nan_to_num(cart.data.root_link_lin_vel_w[:, :2], nan=0.0)
+    return (vel_xy * _tug_pull_dir(env)).sum(dim=1)
+
+
+def _tug_cart_moving_gate(
+    env: ManagerBasedRlEnv,
+    cart_asset: str = "cart",
+    gate_speed: float = 0.02,
+) -> torch.Tensor:
+    """0→1 ramp as the cart's pull-direction speed reaches ``gate_speed``.
+
+    Style rewards multiply by this so posing in pull stance while the cart
+    sits still pays NOTHING — the v1 recipe's lean/cadence terms were farmed
+    exactly that way (policy leaned -25°, cart moved 2.8 cm in 10 s).
+    """
+    return (_tug_cart_pull_vel(env, cart_asset) / gate_speed).clamp(0.0, 1.0)
+
+
 def tug_cart_progress(
     env: ManagerBasedRlEnv,
     max_paid_rate: float = 0.4,
@@ -8733,29 +8754,32 @@ def tug_taut_rope_pull_speed(
     cart_asset: str = "cart",
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-    """Pull-direction robot speed while the rope is taut, clamped to [0, max].
+    """Cart speed along the pull direction while the rope is taut, clamped.
 
-    Zero while the rope is slack (site distance below the tendon's taut
-    length): running forward with a loose rope earns nothing, so the policy
-    learns to take up the slack and pull under tension instead of sprinting
-    and leaving the cart behind. Tautness is geometric (site distance vs the
-    tendon springlength), so no tendon-force sensor is needed. ≥ 0.
+    Pays the LOAD's motion, not the robot's: v1 paid robot speed under a taut
+    rope, and the policy farmed it by walking forward and just STRETCHING the
+    stiff rope (cart never moved). Zero while the rope is slack (site distance
+    below the tendon's taut length). Tautness is geometric (site distance vs
+    the tendon springlength), so no tendon-force sensor is needed. ≥ 0.
     """
-    robot: Entity = env.scene[asset_cfg.name]
     rope_len = _tug_rope_length(env, robot_site, cart_site, cart_asset)
     taut = (rope_len >= taut_length).float()
-    vel_xy = torch.nan_to_num(robot.data.root_link_lin_vel_w[:, :2], nan=0.0)
-    v_pull = (vel_xy * _tug_pull_dir(env)).sum(dim=1)
-    return taut * v_pull.clamp(0.0, max_speed)
+    v_cart = _tug_cart_pull_vel(env, cart_asset)
+    return taut * v_cart.clamp(0.0, max_speed)
 
 
 def tug_trunk_lean_tracking(
     env: ManagerBasedRlEnv,
     target_pitch: float,
     std: float = 0.10,
+    cart_asset: str = "cart",
+    gate_speed: float = 0.02,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-    """Gaussian on trunk pitch vs ``target_pitch``, roll pinned to 0. ∈ [0, 1].
+    """Gaussian on trunk pitch vs ``target_pitch``, roll pinned to 0, GATED on
+    the cart actually moving (× ``_tug_cart_moving_gate``) so the pull stance
+    only pays while pulling — an ungated lean reward is farmable by leaning
+    on a static rope. ∈ [0, 1].
 
     Replaces the base ``upright`` term for the tug task: a puller leans. Pitch
     is read off projected gravity: with the duck facing +x, pitching the head
@@ -8771,7 +8795,8 @@ def tug_trunk_lean_tracking(
     pg_x = torch.nan_to_num(2.0 * (qw * qy - qx * qz), nan=0.0)
     pg_y = torch.nan_to_num(-2.0 * (qy * qz + qw * qx), nan=0.0)
     err = (pg_x - math.sin(target_pitch)).square() + pg_y.square()
-    return torch.exp(-err / (std * std))
+    gauss = torch.exp(-err / (std * std))
+    return gauss * _tug_cart_moving_gate(env, cart_asset, gate_speed)
 
 
 def tug_step_cadence_tracking(
@@ -8780,8 +8805,12 @@ def tug_step_cadence_tracking(
     target_hz: float = 1.5,
     std_hz: float = 0.75,
     tau_s: float = 1.0,
+    cart_asset: str = "cart",
+    gate_speed: float = 0.02,
 ) -> torch.Tensor:
-    """Gaussian on the EMA step cadence vs ``target_hz``. ∈ [0, 1].
+    """Gaussian on the EMA step cadence vs ``target_hz``, GATED on the cart
+    actually moving (× ``_tug_cart_moving_gate``) — ungated, the shuffle recipe
+    farmed it by stepping in place at 3.5 Hz while the cart sat still. ∈ [0, 1].
 
     Cadence = foot contact-state transitions per second / 2 (one step = one
     liftoff + one touchdown), smoothed by a ``tau_s`` EMA so the reward
@@ -8806,7 +8835,8 @@ def tug_step_cadence_tracking(
     alpha = env.step_dt / tau_s
     env._tug_cadence_ema += alpha * (inst - env._tug_cadence_ema)
     cadence = torch.nan_to_num(env._tug_cadence_ema, nan=0.0)
-    return torch.exp(-((cadence - target_hz) / std_hz).square())
+    gauss = torch.exp(-((cadence - target_hz) / std_hz).square())
+    return gauss * _tug_cart_moving_gate(env, cart_asset, gate_speed)
 
 
 def tug_out_of_bounds(
