@@ -214,17 +214,16 @@ def _add_twist_material(spec: mujoco.MjSpec) -> None:
     mat.texuniform = False
     mat.specular = 0.6
     mat.shininess = 0.6
-    # Knot twin: same twist textures, tone pulled DOWN to compensate for the
-    # knot blob facing the key light (the bare sphere-law would render it
-    # cream-bright next to the rope's golden shaft).
+    # Knot twin: SAME twist colour texture as the rope (path-swept UVs), no
+    # normal map (its ridges burr on the coils), tone pulled down slightly
+    # for the blob's light catch.
     kmat = next(m for m in spec.materials if m.name == "tug_knot_tex")
-    kmat.rgba = (0.60, 0.58, 0.52, 1.0)
-    # Plain smooth gold: the twist texture's hard grooves read as burrs
-    # (毛刺) on the blobby coil geometry. Tone matched to the rope shaft.
-    kmat.rgba = (0.38, 0.33, 0.22, 1.0)
+    kmat.rgba = (0.72, 0.70, 0.64, 1.0)
+    kmat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = "tug_twist_tex"
+    kmat.texrepeat = (1.0, 1.0)
     kmat.texuniform = False
-    kmat.specular = 0.05
-    kmat.shininess = 0.1
+    kmat.specular = 0.15
+    kmat.shininess = 0.3
 
 
 
