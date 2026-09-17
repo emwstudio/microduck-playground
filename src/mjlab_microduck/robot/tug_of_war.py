@@ -219,12 +219,12 @@ def _add_twist_material(spec: mujoco.MjSpec) -> None:
     # cream-bright next to the rope's golden shaft).
     kmat = next(m for m in spec.materials if m.name == "tug_knot_tex")
     kmat.rgba = (0.60, 0.58, 0.52, 1.0)
-    kmat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = "tug_twist_tex"
-    kmat.textures[mujoco.mjtTextureRole.mjTEXROLE_NORMAL] = "tug_twist_nrm"
-    kmat.texrepeat = (1.0, 1.0)
+    # Plain smooth gold: the twist texture's hard grooves read as burrs
+    # (毛刺) on the blobby coil geometry. Tone matched to the rope shaft.
+    kmat.rgba = (0.38, 0.33, 0.22, 1.0)
     kmat.texuniform = False
-    kmat.specular = 0.15
-    kmat.shininess = 0.3
+    kmat.specular = 0.05
+    kmat.shininess = 0.1
 
 
 
