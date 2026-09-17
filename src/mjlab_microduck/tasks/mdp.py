@@ -8768,6 +8768,35 @@ def tug_taut_rope_pull_speed(
     return taut * v_cart.clamp(0.0, max_speed)
 
 
+def tug_taut_alive(
+    env: ManagerBasedRlEnv,
+    taut_length: float,
+    max_tilt_cos: float = -0.5,
+    robot_site: str = "rope_hook",
+    cart_site: str = "tug_hook",
+    cart_asset: str = "cart",
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Per-step survival pay, but ONLY while the rope is taut and the trunk is
+    upright-ish (tilt < 60°: pg_z < ``max_tilt_cos``). ∈ {0, 1}.
+
+    Not a plain alive bonus — standing around with a slack rope pays zero, so
+    the only way to collect is to keep the pull loaded and stay on your feet.
+    Trial-v2 policies learned "sprint-pull for ~1.5 s, fall, bank the progress"
+    because falling cost nothing once progress was harvested; this term makes a
+    10 s grind out-pay a 1.5 s burst (and produces the long stalemates that
+    make the match video watchable).
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+    rope_len = _tug_rope_length(env, robot_site, cart_site, cart_asset)
+    taut = rope_len >= taut_length
+    quat = asset.data.root_link_quat_w
+    qw, qx, qy, qz = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
+    pg_z = torch.nan_to_num(1.0 - 2.0 * (qx * qx + qy * qy), nan=-1.0) * -1.0
+    upright = pg_z < max_tilt_cos
+    return (taut & upright).float()
+
+
 def tug_trunk_lean_tracking(
     env: ManagerBasedRlEnv,
     target_pitch: float,

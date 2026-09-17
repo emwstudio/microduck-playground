@@ -157,6 +157,7 @@ def test_penalty_weights_are_negative_task_weights_positive(style):
     for name in (
         "tug_cart_progress",
         "tug_taut_pull_speed",
+        "tug_taut_alive",
         "tug_trunk_lean",
         "tug_step_cadence",
         "head_pose_tracking",
@@ -170,6 +171,7 @@ def test_shared_terms_identical_between_styles():
     # Everything except the four style knobs must match for a fair A/B.
     shared = (
         "tug_cart_progress",
+        "tug_taut_alive",
         "head_pose_tracking",
         "foot_slip",
         "self_collisions",
