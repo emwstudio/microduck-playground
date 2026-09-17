@@ -152,12 +152,13 @@ def test_penalty_weights_are_negative_task_weights_positive(style):
         assert cfg.rewards[name].weight < 0.0, name
     # Task + style terms return >= 0 (progress is potential-based Δ, clamped)
     # → positive weight. No self-negating *_penalty terms exist in this task.
+    # "pose" is deliberately REMOVED (do-nothing jackpot, see cfg comment).
+    assert "pose" not in cfg.rewards
     for name in (
         "tug_cart_progress",
         "tug_taut_pull_speed",
         "tug_trunk_lean",
         "tug_step_cadence",
-        "pose",
         "head_pose_tracking",
     ):
         assert cfg.rewards[name].weight > 0.0, name
@@ -169,7 +170,6 @@ def test_shared_terms_identical_between_styles():
     # Everything except the four style knobs must match for a fair A/B.
     shared = (
         "tug_cart_progress",
-        "pose",
         "head_pose_tracking",
         "foot_slip",
         "self_collisions",
