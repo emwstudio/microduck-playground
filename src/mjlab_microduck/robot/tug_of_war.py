@@ -218,8 +218,12 @@ def _add_twist_material(spec: mujoco.MjSpec) -> None:
     # normal map (its ridges burr on the coils), tone pulled down slightly
     # for the blob's light catch.
     kmat = next(m for m in spec.materials if m.name == "tug_knot_tex")
-    kmat.rgba = (0.72, 0.70, 0.64, 1.0)
+    kmat.rgba = (0.58, 0.56, 0.50, 1.0)
     kmat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = "tug_twist_tex"
+    # normal map back ON: the rope's groove shading is half its tone — the
+    # smooth-geometry knot reads cream-bright without it. Geometry is smooth
+    # now, so the ridges no longer burr.
+    kmat.textures[mujoco.mjtTextureRole.mjTEXROLE_NORMAL] = "tug_twist_nrm"
     kmat.texrepeat = (1.0, 1.0)
     kmat.texuniform = False
     kmat.specular = 0.15
