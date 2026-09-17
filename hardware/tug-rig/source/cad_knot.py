@@ -102,13 +102,15 @@ def clear_collar(knot: trimesh.Trimesh, side: float,
 
 
 def path_uvs(mesh: trimesh.Trimesh, pts: np.ndarray) -> np.ndarray:
-    """SPATIAL UVs: u = vertex x / 17.5 mm (the rope's twist pitch), v =
-    angle around the x axis — the same direction and density as the span
-    rope's twist, so knot and rope read as ONE material. Arclength mapping
-    (previous version) compresses the texture 3-4x on the coils."""
+    """SPATIAL UVs at CONSTANT SURFACE DENSITY: u = vertex x / 17.5 mm (the
+    rope's twist pitch); v = angle about the rope axis × local radius /
+    rope radius — on the fat coil blob the plain angular v stretched the
+    texture's grooves thin and washed the knot out pale (用户: 纹理不对).
+    Now one tile is always 17.5 mm × rope-circumference of REAL surface."""
     v = mesh.vertices                  # knot is built in mm
     u = v[:, 0] / 17.5
-    ang = np.arctan2(v[:, 2], v[:, 1]) / (2.0 * np.pi)
+    r_local = np.hypot(v[:, 1], v[:, 2])
+    ang = np.arctan2(v[:, 2], v[:, 1]) / (2.0 * np.pi) * (r_local / 2.5)
     return np.stack([u, ang], axis=1)
 
 
