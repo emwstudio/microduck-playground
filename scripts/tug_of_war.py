@@ -80,7 +80,12 @@ def reset_round(model, data, rigs, spawns, rng):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--policy", default=DEFAULT_POLICY)
+    parser.add_argument("--policy", default=DEFAULT_POLICY,
+                        help="fallback policy for both teams")
+    parser.add_argument("--policy-red", default=None,
+                        help="red-team policy ONNX (defaults to --policy)")
+    parser.add_argument("--policy-blue", default=None,
+                        help="blue-team policy ONNX (defaults to --policy)")
     parser.add_argument("--n-per-team", type=int, default=5)
     parser.add_argument("--rounds", type=int, default=5)
     parser.add_argument("--round-duration", type=float, default=15.0)
@@ -132,9 +137,12 @@ def main() -> None:
     print(f"{len(rigs)} ducks, {model.nu} actuators, {model.ntendon} rope cords; "
           f"timestep {model.opt.timestep}, control {1.0 / control_dt:.0f} Hz")
 
-    session = ort.InferenceSession(args.policy, providers=["CPUExecutionProvider"])
-    input_name = session.get_inputs()[0].name
-    output_name = session.get_outputs()[0].name
+    sessions = {}
+    for team, policy_path in (("red", args.policy_red or args.policy),
+                              ("blue", args.policy_blue or args.policy)):
+        s = ort.InferenceSession(policy_path, providers=["CPUExecutionProvider"])
+        sessions[team] = (s, s.get_inputs()[0].name, s.get_outputs()[0].name)
+        print(f"{team} policy: {policy_path}")
 
     rope_spans = resolve_rope_visuals(model, args.n_per_team, args.spacing, args.gap)
     renderer = None
@@ -175,10 +183,12 @@ def main() -> None:
             if not np.isfinite(obs).all():
                 winner, reason = "draw", "NaN in observations"
                 break
-            # The exported ONNX pins batch=1, so infer per duck.
+            # The exported ONNX pins batch=1, so infer per duck on its team's policy.
             actions = np.concatenate([
-                session.run([output_name], {input_name: obs[k:k + 1]})[0]
-                for k in range(len(rigs))
+                sessions[rig.team][0].run(
+                    [sessions[rig.team][2]],
+                    {sessions[rig.team][1]: obs[k:k + 1]})[0]
+                for k, rig in enumerate(rigs)
             ])
             apply_actions(data, rigs, actions)
             for _ in range(decimation):
