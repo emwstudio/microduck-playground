@@ -320,6 +320,90 @@ def get_swing360_spec() -> mujoco.MjSpec:
     return spec
 
 
+# -- Tug task: weighted sled cart + butt-ring tow rope -------------------------
+# The duck faces +x with the cart behind it (-x); a tension-only spatial tendon
+# (same dead-band cord model as robot/tug_of_war.py) links the butt tow eye to
+# the cart. Taut rope => the duck's forward walk drags the cart.
+# Butt tow eye of the harness collar (hardware/tug-rig/cad_collar.py), trunk
+# frame — identical to RING_LOCAL_* in robot/tug_of_war.py.
+TUG_RING_LOCAL = (-0.0686, 0.0, 0.016)
+# Low, elongated sled: long along the pull direction (x), short enough (4 cm)
+# that it never interferes with leg swing behind the duck.
+TUG_CART_HALF_X = 0.10
+TUG_CART_HALF_Y = 0.06
+TUG_CART_HALF_Z = 0.02
+# 3 kg on a 0.8 kg duck: dragging it costs ~4.4 N at mu=0.15, i.e. ~55% of the
+# duck's static foot-grip budget (mu_foot ~1.0 -> 7.8 N) — pullable but hard.
+TUG_CART_MASS = 3.0
+# Contact mu between cart and floor. MuJoCo combines geom frictions by
+# element-wise MAX, and the terrain floor carries mu=1.0 — so the cart geom
+# must ALSO take priority=1 for its own low friction to win the pair
+# (verified empirically: slip threshold = mu_cart * m * g).
+TUG_CART_FRICTION = 0.15
+
+
+def get_tug_walk_spec() -> mujoco.MjSpec:
+    """Walk model + harness collar + butt tow-eye site for the tug task.
+
+    The duck WEARS the clamp collar (hardware/tug-rig/cad_collar.py STL,
+    density=0 — prop only, dynamics unchanged) and the rope anchors at the
+    collar's back D-ring centre, matching the match demo's hardware exactly.
+    The tendon itself is added at scene level (it wraps a site on the cart
+    entity, which only exists after both specs are attached to the scene).
+    """
+    spec = mujoco.MjSpec.from_file(str(MICRODUCK_WALK_XML))
+    trunk = next(body for body in spec.bodies if body.name == "trunk_base")
+    # Physics anchor, not decoration — invisible like the demo's rope hooks.
+    trunk.add_site(
+        name="rope_hook",
+        pos=TUG_RING_LOCAL,
+        size=(0.004,),
+        rgba=(0.0, 0.0, 0.0, 0.0),
+    )
+    # The user's harness collar, worn on the trunk (same STL + placement as
+    # the match demo in robot/tug_of_war.py).
+    spec.add_mesh(
+        name="tug_collar_stl",
+        file=str(_ROBOT_DIR / "assets" / "tug_collar.stl"),
+    )
+    trunk.add_geom(
+        name="tug_collar",
+        type=mujoco.mjtGeom.mjGEOM_MESH,
+        meshname="tug_collar_stl",
+        rgba=(0.65, 1.0, 0.02, 1.0),   # fluorescent lime — 炸 paint
+        contype=0,
+        conaffinity=0,
+        density=0.0,
+    )
+    return spec
+
+
+def get_tug_cart_spec() -> mujoco.MjSpec:
+    """Standalone weighted-sled prop: one free box body + front tow site."""
+    spec = mujoco.MjSpec()
+    body = spec.worldbody.add_body(
+        name="tug_cart", pos=(-0.35, 0.0, TUG_CART_HALF_Z)
+    )
+    body.add_freejoint(name="tug_cart_free")
+    body.add_geom(
+        name="tug_cart_geom",
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        size=(TUG_CART_HALF_X, TUG_CART_HALF_Y, TUG_CART_HALF_Z),
+        mass=TUG_CART_MASS,
+        friction=(TUG_CART_FRICTION, 0.005, 0.0001),
+        priority=1,  # see TUG_CART_FRICTION note — wins the pair vs the floor
+        rgba=(0.25, 0.27, 0.30, 1.0),
+    )
+    # Tow eye on the front-top edge (faces the duck's butt ring at spawn).
+    body.add_site(
+        name="tug_hook",
+        pos=(TUG_CART_HALF_X, 0.0, TUG_CART_HALF_Z),
+        size=(0.004,),
+        rgba=(0.0, 0.0, 0.0, 0.0),
+    )
+    return spec
+
+
 HOME_FRAME = EntityCfg.InitialStateCfg(
     joint_pos={
         # Lower body — STAND2 pose: trunk shifted ~5mm forward over the feet so
@@ -523,6 +607,25 @@ MICRODUCK_ROLLERS_BACKLASH_ROBOT_CFG = EntityCfg(
 MICRODUCK_BALL_CFG = EntityCfg(
     spec_fn=get_ball_spec,
     init_state=EntityCfg.InitialStateCfg(pos=(0.3, 0.0, 0.035)),
+)
+
+# Tug task entities: walk robot + butt tow eye, and the weighted sled prop.
+# The rope tendon between them is added by the tug env's scene spec_fn.
+MICRODUCK_TUG_ROBOT_CFG = EntityCfg(
+    spec_fn=get_tug_walk_spec,
+    init_state=HOME_FRAME,
+    collisions=(FULL_COLLISION,),
+    articulation=EntityArticulationInfoCfg(
+        actuators=(actuators,),
+        soft_joint_pos_limit_factor=0.9,
+    ),
+)
+
+# Position is set each episode by the reset_tug_cart event; the init pos here
+# only matters for the pristine pre-first-reset state.
+MICRODUCK_TUG_CART_CFG = EntityCfg(
+    spec_fn=get_tug_cart_spec,
+    init_state=EntityCfg.InitialStateCfg(pos=(-0.35, 0.0, TUG_CART_HALF_Z)),
 )
 
 # Roller skate robot: the 4 passive wheel joints (passive_*wheel) have no XML

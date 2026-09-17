@@ -84,6 +84,11 @@ from .microduck_swing360_env_cfg import (
     make_microduck_swing360_env_cfg,
     MicroduckSwing360RlCfg,
 )
+from .microduck_tug_env_cfg import (
+    make_microduck_tug_env_cfg,
+    MicroduckTugShuffleRlCfg,
+    MicroduckTugSteadyRlCfg,
+)
 from .backlash import make_backlash_variant
 
 # Standard velocity task
@@ -288,6 +293,25 @@ register_mjlab_task(
     env_cfg=make_microduck_roulade_env_cfg(),
     play_env_cfg=make_microduck_roulade_env_cfg(play=True),
     rl_cfg=MicroduckRouladeRlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
+
+# Tug-of-war sled drag — duck pulls a 3 kg cart behind itself on a slack rope.
+# Two style recipes on identical task/anti-fall terms: steady lean-back pull
+# vs high-cadence shuffle pull.
+register_mjlab_task(
+    task_id="Mjlab-Microduck-Tug-Steady",
+    env_cfg=make_microduck_tug_env_cfg(style="steady"),
+    play_env_cfg=make_microduck_tug_env_cfg(style="steady", play=True),
+    rl_cfg=MicroduckTugSteadyRlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
+
+register_mjlab_task(
+    task_id="Mjlab-Microduck-Tug-Shuffle",
+    env_cfg=make_microduck_tug_env_cfg(style="shuffle"),
+    play_env_cfg=make_microduck_tug_env_cfg(style="shuffle", play=True),
+    rl_cfg=MicroduckTugShuffleRlCfg,
     runner_cls=MicroduckOnPolicyRunner,
 )
 

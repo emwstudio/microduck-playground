@@ -8604,3 +8604,224 @@ def basketball_body_pad(env: ManagerBasedRlEnv) -> torch.Tensor:
 def basketball_head_pad(env: ManagerBasedRlEnv) -> torch.Tensor:
     """Zero pad for the 4-D head_command slot (61-D contract, no head command here)."""
     return torch.zeros(env.num_envs, 4, device=env.device)
+
+
+# =============================================================================
+# Tug task — duck drags a weighted sled behind itself on a slack rope
+# =============================================================================
+# Geometry (see microduck_tug_env_cfg.py): the duck faces +x, the cart sits
+# behind it (-x), and a tension-only tendon links the butt tow eye to the cart.
+# Pulling = walking forward (+x) with the rope taut. The per-env pull direction
+# is frozen at reset (the duck's spawn yaw), exactly like the ball-kick
+# direction — the actor is blind to the rope/cart, so heading drift can only
+# cost reward, never redefine it.
+
+
+def _tug_pull_dir(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Per-env world-frame pull direction (XY unit vector), lazily allocated.
+
+    Set by ``reset_tug_cart`` to the robot's forward direction at episode
+    reset and frozen for the episode (same rationale as ``_ball_kick_dir``).
+    """
+    if not hasattr(env, "_tug_pull_dir_w"):
+        env._tug_pull_dir_w = torch.zeros(env.num_envs, 2, device=env.device)
+        env._tug_pull_dir_w[:, 0] = 1.0
+    return env._tug_pull_dir_w
+
+
+def reset_tug_cart(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+    gap_range: tuple = (0.13, 0.19),
+    hook_local_x: float = -0.0686,
+    cart_half_x: float = 0.10,
+    cart_half_z: float = 0.02,
+    asset_name: str = "cart",
+):
+    """Place the cart behind the duck's butt hook; store the pull direction.
+
+    The hook-to-hook spawn gap is sampled from ``gap_range`` while the rope's
+    taut length (tendon springlength) is fixed at compile time — so this spawn
+    DR IS the slack DR: envs with gap < taut length start with a loose rope,
+    envs above start pre-tensioned. Non-accumulating by construction (absolute
+    pose write, like ``reset_ball_in_front_of_foot``).
+
+    Reads the robot root from qpos directly (root_link_pos_w lags until the
+    next forward()); must be registered AFTER reset_base (events run in dict
+    insertion order) so the robot pose is final.
+    """
+    if env_ids is None or len(env_ids) == 0:
+        return
+    env_ids = env_ids.to(env.device)
+    robot: Entity = env.scene["robot"]
+    cart: Entity = env.scene[asset_name]
+
+    root = env.sim.data.qpos[env_ids][:, robot.indexing.free_joint_q_adr]
+    qw, qx, qy, qz = root[:, 3], root[:, 4], root[:, 5], root[:, 6]
+    yaw = torch.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+    cos_y, sin_y = torch.cos(yaw), torch.sin(yaw)
+
+    n = len(env_ids)
+    gap = torch.rand(n, device=env.device) * (gap_range[1] - gap_range[0]) + gap_range[0]
+    # Cart center sits gap + half-length behind the butt hook, long axis along
+    # the pull line (cart x aligned with the robot's spawn yaw).
+    off_x = hook_local_x - gap - cart_half_x
+    pose = torch.zeros(n, 7, device=env.device)
+    pose[:, 0] = root[:, 0] + cos_y * off_x
+    pose[:, 1] = root[:, 1] + sin_y * off_x
+    pose[:, 2] = env.scene.terrain.env_origins[env_ids, 2] + cart_half_z
+    pose[:, 3] = torch.cos(yaw / 2.0)
+    pose[:, 6] = torch.sin(yaw / 2.0)
+    cart.write_root_link_pose_to_sim(pose, env_ids)
+    cart.write_root_link_velocity_to_sim(
+        torch.zeros(n, 6, device=env.device), env_ids
+    )
+
+    pull_dir = _tug_pull_dir(env)
+    pull_dir[env_ids, 0] = cos_y
+    pull_dir[env_ids, 1] = sin_y
+
+
+def tug_cart_progress(
+    env: ManagerBasedRlEnv,
+    max_paid_rate: float = 0.4,
+    asset_name: str = "cart",
+) -> torch.Tensor:
+    """Potential-based shaping: Δ of the cart's displacement along pull_dir.
+
+    Pays only for NEW cart motion along the frozen pull direction (clamped to
+    ``max_paid_rate`` per second, like the swing frontier's rate cap): holding
+    the cart still pays zero, sliding it backward charges, and no pose can
+    farm it — the anti-jackpot pattern of ``upright_progress``. NaN-safe.
+    """
+    cart: Entity = env.scene[asset_name]
+    pos_xy = torch.nan_to_num(cart.data.root_link_pos_w[:, :2], nan=0.0)
+    potential = (pos_xy * _tug_pull_dir(env)).sum(dim=1)
+    if not hasattr(env, "_tug_cart_potential_prev"):
+        env._tug_cart_potential_prev = potential.clone()
+    # Freshly reset envs: no spurious delta from the previous episode's cart.
+    fresh = env.episode_length_buf <= 1
+    env._tug_cart_potential_prev[fresh] = potential[fresh]
+    delta = potential - env._tug_cart_potential_prev
+    env._tug_cart_potential_prev = potential.clone()
+    max_step = max_paid_rate * env.step_dt
+    return delta.clamp(-max_step, max_step)
+
+
+def _tug_rope_length(
+    env: ManagerBasedRlEnv,
+    robot_site: str,
+    cart_site: str,
+    cart_asset: str,
+) -> torch.Tensor:
+    """Straight-line distance between the two rope anchor sites, per env."""
+    robot: Entity = env.scene["robot"]
+    cart: Entity = env.scene[cart_asset]
+    r_ids, _ = robot.find_sites(robot_site, preserve_order=True)
+    c_ids, _ = cart.find_sites(cart_site, preserve_order=True)
+    a = torch.nan_to_num(robot.data.site_pos_w[:, r_ids[0]], nan=0.0)
+    b = torch.nan_to_num(cart.data.site_pos_w[:, c_ids[0]], nan=0.0)
+    return torch.linalg.norm(b - a, dim=1)
+
+
+def tug_taut_rope_pull_speed(
+    env: ManagerBasedRlEnv,
+    taut_length: float,
+    max_speed: float = 0.3,
+    robot_site: str = "rope_hook",
+    cart_site: str = "tug_hook",
+    cart_asset: str = "cart",
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Pull-direction robot speed while the rope is taut, clamped to [0, max].
+
+    Zero while the rope is slack (site distance below the tendon's taut
+    length): running forward with a loose rope earns nothing, so the policy
+    learns to take up the slack and pull under tension instead of sprinting
+    and leaving the cart behind. Tautness is geometric (site distance vs the
+    tendon springlength), so no tendon-force sensor is needed. ≥ 0.
+    """
+    robot: Entity = env.scene[asset_cfg.name]
+    rope_len = _tug_rope_length(env, robot_site, cart_site, cart_asset)
+    taut = (rope_len >= taut_length).float()
+    vel_xy = torch.nan_to_num(robot.data.root_link_lin_vel_w[:, :2], nan=0.0)
+    v_pull = (vel_xy * _tug_pull_dir(env)).sum(dim=1)
+    return taut * v_pull.clamp(0.0, max_speed)
+
+
+def tug_trunk_lean_tracking(
+    env: ManagerBasedRlEnv,
+    target_pitch: float,
+    std: float = 0.10,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Gaussian on trunk pitch vs ``target_pitch``, roll pinned to 0. ∈ [0, 1].
+
+    Replaces the base ``upright`` term for the tug task: a puller leans. Pitch
+    is read off projected gravity: with the duck facing +x, pitching the head
+    FORWARD (+x) by θ gives pg_x = sin θ, so a backward lean (butt toward the
+    load, tug-of-war stance) is a NEGATIVE target (steady style: ~-18°).
+    Roll stays upright via the pg_y term in both styles, so this one term
+    subsumes upright for the sagittal task.
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+    quat = asset.data.root_link_quat_w
+    qw, qx, qy, qz = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
+    # pg = R^T @ (0,0,-1): pg_x = 2(wy - xz), pg_y = -2(yz + wx)
+    pg_x = torch.nan_to_num(2.0 * (qw * qy - qx * qz), nan=0.0)
+    pg_y = torch.nan_to_num(-2.0 * (qy * qz + qw * qx), nan=0.0)
+    err = (pg_x - math.sin(target_pitch)).square() + pg_y.square()
+    return torch.exp(-err / (std * std))
+
+
+def tug_step_cadence_tracking(
+    env: ManagerBasedRlEnv,
+    sensor_name: str = "feet_ground_contact",
+    target_hz: float = 1.5,
+    std_hz: float = 0.75,
+    tau_s: float = 1.0,
+) -> torch.Tensor:
+    """Gaussian on the EMA step cadence vs ``target_hz``. ∈ [0, 1].
+
+    Cadence = foot contact-state transitions per second / 2 (one step = one
+    liftoff + one touchdown), smoothed by a ``tau_s`` EMA so the reward
+    doesn't stair-step like the fixed 1 s windows of contact_frequency_penalty.
+    Both feet count, so alternating steps drive it up and standing still sits
+    at zero. The style recipes only differ in the target: low for the steady
+    lean-pull, high for the shuffle quick-pull.
+    """
+    if sensor_name not in env.scene.sensors:
+        return torch.zeros(env.num_envs, device=env.device)
+    contacts = env.scene.sensors[sensor_name].data.found[:, :2]
+    fresh = env.episode_length_buf <= 1
+    if not hasattr(env, "_tug_cadence_prev"):
+        env._tug_cadence_prev = contacts.clone()
+        env._tug_cadence_ema = torch.zeros(env.num_envs, device=env.device)
+    # Re-anchor buffers after resets so a respawned foot state isn't an edge.
+    env._tug_cadence_prev[fresh] = contacts[fresh]
+    env._tug_cadence_ema[fresh] = 0.0
+    edges = torch.any(contacts != env._tug_cadence_prev, dim=1).float()
+    env._tug_cadence_prev = contacts.clone()
+    inst = edges / (2.0 * env.step_dt)
+    alpha = env.step_dt / tau_s
+    env._tug_cadence_ema += alpha * (inst - env._tug_cadence_ema)
+    cadence = torch.nan_to_num(env._tug_cadence_ema, nan=0.0)
+    return torch.exp(-((cadence - target_hz) / std_hz).square())
+
+
+def tug_out_of_bounds(
+    env: ManagerBasedRlEnv,
+    max_distance: float,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Terminate when the asset wanders ``max_distance`` from its env origin.
+
+    Plane-terrain replacement for ``out_of_terrain_bounds`` (which is a no-op
+    off generated terrain): registered for the robot AND the cart, so a runaway
+    pull or a flung cart ends the episode instead of drifting forever.
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+    origins = env.scene.terrain.env_origins[:, :2]
+    pos_xy = torch.nan_to_num(asset.data.root_link_pos_w[:, :2], nan=0.0)
+    dist = torch.linalg.norm(pos_xy - origins, dim=1)
+    return dist > max_distance
