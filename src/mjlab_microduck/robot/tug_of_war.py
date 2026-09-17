@@ -214,6 +214,17 @@ def _add_twist_material(spec: mujoco.MjSpec) -> None:
     mat.texuniform = False
     mat.specular = 0.6
     mat.shininess = 0.6
+    # Knot twin: same twist textures, tone pulled DOWN to compensate for the
+    # knot blob facing the key light (the bare sphere-law would render it
+    # cream-bright next to the rope's golden shaft).
+    kmat = next(m for m in spec.materials if m.name == "tug_knot_tex")
+    kmat.rgba = (0.60, 0.58, 0.52, 1.0)
+    kmat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = "tug_twist_tex"
+    kmat.textures[mujoco.mjtTextureRole.mjTEXROLE_NORMAL] = "tug_twist_nrm"
+    kmat.texrepeat = (1.0, 1.0)
+    kmat.texuniform = False
+    kmat.specular = 0.15
+    kmat.shininess = 0.3
 
 
 
@@ -249,6 +260,7 @@ def _add_rig_materials(spec: mujoco.MjSpec) -> None:
     steel.rgba = (0.10, 0.10, 0.12, 1.0)   # black-oxide screw: pops against the alu collar
     steel.specular = 0.9
     steel.shininess = 0.7
+    knot_tex = spec.add_material(name="tug_knot_tex")   # tone-matched below
     orange = spec.add_material(name="tug_carabiner")
     orange.rgba = (0.92, 0.42, 0.08, 1.0)   # anodized-orange carabiner
     orange.specular = 0.85
@@ -286,8 +298,7 @@ def _add_knots(spec: mujoco.MjSpec, n_per_team: int) -> None:
             type=mujoco.mjtGeom.mjGEOM_MESH,
             meshname="tug_knot_stl" if sign > 0 else "tug_knot_mir_stl",
             pos=(eye[0] + sign * EYE_RING_MAJOR, 0.0, eye[2]),
-            material="tug_twist",   # the rope's own twist texture — the knot
-                                    # and the span read as ONE rope
+            material="tug_knot_tex",   # same twist texture, tone-matched
             contype=0,
             conaffinity=0,
             density=0.0,
