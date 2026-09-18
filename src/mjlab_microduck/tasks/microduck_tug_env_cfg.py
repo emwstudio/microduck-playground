@@ -61,7 +61,9 @@ _HOOK_DZ = 0.10               # butt-hook height (~0.14) minus cart-eye height (
 ROPE_TAUT_LENGTH = math.hypot(CART_GAP_NOMINAL, _HOOK_DZ) + ROPE_SLACK
 
 CART_MASS_SCALE_RANGE = (0.8, 2.0)      # 2.4–6.0 kg — learn to pull a load that does NOT give
-CART_FRICTION_SCALE_RANGE = (0.7, 1.4)  # mu 0.105–0.21 → 3.1–6.2 N drag at 3 kg
+CART_FRICTION_SCALE_RANGE = (0.7, 4.0)  # mu 0.105–0.6: 低端好拉，高端 6kg 时 ~35N
+                                        # 拖不动 — 模拟比赛中不肯动的对手鸭子
+                                        # (v3 上限 8.8N，比赛遇到 15.7N+ 硬锚点就翻)
 
 # Task reward shaping
 PROGRESS_MAX_PAID_RATE = 0.4   # m/s of cart drag that pays; faster pays no extra
