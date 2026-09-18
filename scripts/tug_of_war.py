@@ -111,6 +111,13 @@ def main() -> None:
                              "sled rope starts taut; a slack match start lets "
                              "lean-back policies topple before tension builds)")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--rope-damping", type=float, default=2.0,
+                        help="tendon damping (N·s/m) on every rope cord; 0 = pure "
+                             "spring. The stiff 200 N/m dead-band cord yanks ducks "
+                             "over during the first seconds' tension transients "
+                             "(outer ducks toppled at 1-4s and lay there for the "
+                             "whole round); 2.0 absorbs the yanks — zero early "
+                             "falls, rounds stay 10-15s, outcomes stay balanced")
     parser.add_argument("--foot-friction", type=float, default=2.0,
                         help="foot sliding friction mu; sim default ~1.0 lets the rope "
                              "drag ducks instead of gripping (real PU sole ~2.0)")
@@ -141,6 +148,9 @@ def main() -> None:
     # so the chain carries tension from t=0 like the training sled rope does.
     pret = ROPE_SLACK + args.pretension
     spawns = duck_spawns(args.n_per_team, args.spacing + pret, args.gap + pret)
+    if args.rope_damping > 0:
+        model.tendon_damping[:] = args.rope_damping
+        print(f"rope damping {args.rope_damping} N·s/m on {model.ntendon} cords")
     if args.foot_friction > 0:
         foot_geoms = [i for i in range(model.ngeom)
                       if "foot" in (mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, i) or "")]
