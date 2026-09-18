@@ -73,7 +73,7 @@ PULL_SPEED_CAP_SHUFFLE = 0.35
 # Style recipe parameters
 STEADY_LEAN_PITCH = math.radians(-18.0)  # head toward -x = backward lean (butt to load)
 SHUFFLE_LEAN_PITCH = 0.0
-LEAN_STD = 0.10                # rad (~±6°) — the error we still care about
+LEAN_STD = 0.07                # rad (~±4°) — v5 收紧: v4 挂到 -50° 都没被扣分
 STEADY_CADENCE_HZ = 1.5        # slow deliberate steps
 SHUFFLE_CADENCE_HZ = 3.5       # fast alternating shuffle
 CADENCE_STD_HZ = 0.75
@@ -220,7 +220,8 @@ def make_microduck_tug_env_cfg(
     )
     cfg.rewards["tug_step_cadence"] = RewardTermCfg(
         func=microduck_mdp.tug_step_cadence_tracking,
-        weight=1.0,
+        weight=2.0,  # v4 was 1.0 — drowned by the 500-weight progress term, so
+                     # hanging on the rope out-paid stepping; v5 makes legs pay
         params={
             "sensor_name": "feet_ground_contact",
             "target_hz": STEADY_CADENCE_HZ if steady else SHUFFLE_CADENCE_HZ,
