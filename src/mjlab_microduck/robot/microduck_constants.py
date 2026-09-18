@@ -621,6 +621,21 @@ MICRODUCK_TUG_ROBOT_CFG = EntityCfg(
     ),
 )
 
+# Tug-chain task (1v1 duck-vs-duck self-play): the opponent duck is physically
+# identical to the learner (walk model + harness collar + butt tow eye), so it
+# reuses get_tug_walk_spec. It needs its OWN EntityCfg instance — entity cfgs
+# carry per-entity resolved state, so two entities must not share one object.
+# Position is set each episode by the reset_tug_chain_opponent event.
+MICRODUCK_TUG_CHAIN_OPPONENT_CFG = EntityCfg(
+    spec_fn=get_tug_walk_spec,
+    init_state=HOME_FRAME,
+    collisions=(FULL_COLLISION,),
+    articulation=EntityArticulationInfoCfg(
+        actuators=(actuators,),
+        soft_joint_pos_limit_factor=0.9,
+    ),
+)
+
 # Position is set each episode by the reset_tug_cart event; the init pos here
 # only matters for the pristine pre-first-reset state.
 MICRODUCK_TUG_CART_CFG = EntityCfg(

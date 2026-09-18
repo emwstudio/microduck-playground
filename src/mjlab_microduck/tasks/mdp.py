@@ -2,6 +2,7 @@
 
 import math
 from dataclasses import dataclass as _dataclass
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -16,6 +17,7 @@ from mjlab.tasks.velocity.mdp.velocity_command import UniformVelocityCommand, Un
 from mjlab.tasks.velocity.mdp import observations as _velocity_obs
 from mjlab.managers.command_manager import CommandTerm
 from mjlab.managers import CommandTermCfg
+from mjlab.managers.action_manager import ActionTerm, ActionTermCfg
 from mjlab.managers.event_manager import requires_model_fields
 from mjlab.utils.lab_api.math import matrix_from_quat, wrap_to_pi, quat_apply, quat_from_angle_axis
 from rsl_rl.algorithms.ppo import PPO as _PPO
@@ -8886,3 +8888,327 @@ def tug_out_of_bounds(
     pos_xy = torch.nan_to_num(asset.data.root_link_pos_w[:, :2], nan=0.0)
     dist = torch.linalg.norm(pos_xy - origins, dim=1)
     return dist > max_distance
+
+
+# =============================================================================
+# Tug-chain task — 1v1 duck-vs-duck chained tug-of-war (frozen-ONNX opponent)
+# =============================================================================
+# Two harness ducks stand back-to-back, linked butt-ring to butt-ring by the
+# match's tension-only cord (robot/tug_of_war.py parameters). The learner is
+# the "robot" entity; the "opponent" entity is driven by a FROZEN tug ONNX
+# policy (tug_steady_v6 / tug_shuffle_v6) rebuilt in pure torch below — the
+# sled-trained policies fall 67-90% of the time against a live duck that pulls
+# back, so the opponent has to be in the training loop.
+#
+# Geometry: both ducks wear the harness collar (TUG_RING_LOCAL butt ring).
+# Learner faces +x, opponent faces -x, rings face each other. Match 1v1 link:
+# ring-to-ring nominal ≈ 0.103 m + 0.005 m slack (ROPE_TAUT_LENGTH = 0.108 m),
+# i.e. trunk-to-trunk ≈ 0.240 m. Spawn pre-tensions the rope by 5-10 mm.
+
+
+class FrozenTugPolicy:
+    """Pure-torch rebuild of an exported tug ONNX policy (MLP + baked normalizer).
+
+    scripts/export.py bakes rsl_rl's EmpiricalNormalization into the ONNX graph
+    as Sub(obs, mean) → Div(., scale) → Gemm/ELU MLP (61→512→256→128→14, ELU
+    alpha=1, Gemm transB=1). This loader reads the initializers back out and
+    reconstructs the identical forward pass in torch, so the opponent runs
+    batched on the env device — no onnxruntime, no CPU↔GPU sync in the
+    training loop. Parity vs onnxruntime (<1e-4) is locked by
+    tests/test_tug_chain_env_cfg.py.
+    """
+
+    def __init__(self, onnx_path: "str | Path", device: str):
+        import onnx  # local import: only needed when a chain env is built
+
+        model = onnx.load(str(onnx_path))
+        init = {
+            i.name: torch.from_numpy(np.array(onnx.numpy_helper.to_array(i))).float()
+            for i in model.graph.initializer
+        }
+        graph = model.graph
+        # Baked obs normalizer: Sub then Div.
+        sub = next(n for n in graph.node if n.op_type == "Sub")
+        div = next(n for n in graph.node if n.op_type == "Div")
+        self._mean = init[sub.input[1]].to(device)
+        self._scale = init[div.input[1]].to(device)
+        # MLP layers in graph (topological) order; a Gemm is followed by ELU
+        # iff some Elu node consumes its output.
+        elu_inputs = {n.input[0] for n in graph.node if n.op_type == "Elu"}
+        self._weights: list[torch.Tensor] = []
+        self._biases: list[torch.Tensor] = []
+        self._elu: list[bool] = []
+        for node in graph.node:
+            if node.op_type != "Gemm":
+                continue
+            attrs = {a.name: (a.i if a.HasField("i") else a.f) for a in node.attribute}
+            assert attrs.get("alpha", 1.0) == 1.0 and attrs.get("beta", 1.0) == 1.0
+            assert attrs.get("transB", 0) == 1, "expected Gemm transB=1 (torch Linear layout)"
+            self._weights.append(init[node.input[1]].to(device))
+            self._biases.append(init[node.input[2]].to(device))
+            self._elu.append(node.output[0] in elu_inputs)
+
+    @property
+    def obs_dim(self) -> int:
+        return int(self._mean.numel())
+
+    @property
+    def action_dim(self) -> int:
+        return int(self._biases[-1].numel())
+
+    def __call__(self, obs: torch.Tensor) -> torch.Tensor:
+        x = (obs - self._mean) / self._scale
+        for w, b, elu in zip(self._weights, self._biases, self._elu):
+            x = x @ w.T + b
+            if elu:
+                x = torch.nn.functional.elu(x)  # ONNX Elu alpha=1.0
+        return x
+
+
+class FrozenTugOpponentAction(ActionTerm):
+    """Zero-dim action term: drives the opponent duck with a frozen ONNX policy.
+
+    Registered as a SECOND action term whose ``action_dim`` is 0, so the
+    learner's action contract stays exactly 14D while the action manager still
+    calls ``process_actions`` once per env step (opponent obs → frozen MLP →
+    position targets, batched on the env device) and ``apply_actions`` every
+    physics substep — the same execution cadence as the learner's own
+    JointPositionAction. The opponent's obs follow the deployment contract of
+    robot/tug_of_war.py's compute_obs: ang_vel(3) | proj_gravity(3) |
+    joint_pos_rel(14) | joint_vel(14) | last_action(14) | twist(3 zeros —
+    the tug policies are self-driven, their command slot was zero-padded in
+    training) | head_pose(4 zeros) | body_pose(6 zeros).
+    """
+
+    cfg: "FrozenTugOpponentActionCfg"
+
+    def __init__(self, cfg: "FrozenTugOpponentActionCfg", env: ManagerBasedRlEnv):
+        super().__init__(cfg=cfg, env=env)
+        self._policy = FrozenTugPolicy(cfg.policy_path, device=self.device)
+        self._servo_ids = _servo_joint_ids(env, self._entity)
+        n = len(self._servo_ids)
+        assert self._policy.obs_dim == 61 and self._policy.action_dim == n
+        # (14,) absolute HOME pose; target = HOME + raw action (scale=1.0,
+        # default-offset convention of JointPositionAction). The opponent has
+        # no encoder-bias DR, so no bias subtraction is needed.
+        self._default_pos = self._entity.data.default_joint_pos[0, self._servo_ids].clone()
+        self._last_action = torch.zeros(self.num_envs, n, device=self.device)
+        self._target = self._default_pos.unsqueeze(0).repeat(self.num_envs, 1)
+
+    @property
+    def action_dim(self) -> int:
+        return 0
+
+    @property
+    def raw_action(self) -> torch.Tensor:
+        return torch.zeros(self.num_envs, 0, device=self.device)
+
+    def _compute_obs(self) -> torch.Tensor:
+        d = self._entity.data
+        ids = self._servo_ids
+        zeros = torch.zeros(self.num_envs, 13, device=self.device)
+        return torch.cat(
+            [
+                torch.nan_to_num(d.root_link_ang_vel_b, nan=0.0),
+                torch.nan_to_num(d.projected_gravity_b, nan=0.0),
+                torch.nan_to_num(d.joint_pos[:, ids] - self._default_pos, nan=0.0),
+                torch.nan_to_num(d.joint_vel[:, ids], nan=0.0),
+                self._last_action,
+                zeros,  # twist(3) | head_pose(4) | body_pose(6) — all zero-padded
+            ],
+            dim=1,
+        )
+
+    def process_actions(self, actions: torch.Tensor) -> None:
+        del actions  # 0-dim slice of the learner's action; unused by design
+        obs = self._compute_obs()  # reads PREVIOUS last_action before overwrite
+        with torch.no_grad():
+            self._last_action[:] = self._policy(obs)
+        self._target = self._default_pos + self._last_action
+
+    def apply_actions(self) -> None:
+        self._entity.set_joint_position_target(self._target, joint_ids=self._servo_ids)
+
+    def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+        if env_ids is None:
+            env_ids = slice(None)
+        self._last_action[env_ids] = 0.0
+        self._target[env_ids] = self._default_pos
+
+
+@_dataclass(kw_only=True)
+class FrozenTugOpponentActionCfg(ActionTermCfg):
+    """Config for FrozenTugOpponentAction. ``entity_name`` = "opponent"."""
+
+    policy_path: str
+
+    def build(self, env: ManagerBasedRlEnv) -> FrozenTugOpponentAction:
+        return FrozenTugOpponentAction(self, env)
+
+
+def _tug_chain_opponent_vel(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Opponent velocity along the frozen pull direction, signed (m/s).
+
+    Positive = the opponent is being dragged toward/past the learner (learner
+    winning); negative = the learner is being dragged. NaN-safe.
+    """
+    opp: Entity = env.scene["opponent"]
+    vel_xy = torch.nan_to_num(opp.data.root_link_lin_vel_w[:, :2], nan=0.0)
+    return (vel_xy * _tug_pull_dir(env)).sum(dim=1)
+
+
+def _tug_chain_active_gate(
+    env: ManagerBasedRlEnv,
+    taut_length: float,
+    gate_speed: float = 0.02,
+) -> torch.Tensor:
+    """0→1 style gate: opponent moving along the pull direction OR rope taut.
+
+    The sled task gated style terms on the cart MOVING. Against a live
+    opponent the rope stays taut while both ducks grind to a standstill, and
+    the pull stance must still pay there — otherwise the policy learns to hang
+    passively on the rope whenever the opponent anchors (the v4/v5 rope-hang
+    failure, now with a counter-pulling load). ∈ [0, 1].
+    """
+    moving = (_tug_chain_opponent_vel(env) / gate_speed).clamp(0.0, 1.0)
+    rope_len = _tug_rope_length(env, "rope_hook", "rope_hook", "opponent")
+    taut = (rope_len >= taut_length).float()
+    return torch.maximum(moving, taut)
+
+
+def tug_chain_progress(
+    env: ManagerBasedRlEnv,
+    max_paid_rate: float = 0.4,
+) -> torch.Tensor:
+    """Potential-based shaping: Δ of the OPPONENT's displacement along pull_dir.
+
+    Same anti-jackpot pattern as ``tug_cart_progress``: dragging the opponent
+    your way pays (Δ > 0), being dragged theirs charges (Δ < 0), holding still
+    pays zero, and the per-step payment is rate-capped so jerks can't out-pay
+    a steady pull. NaN-safe.
+    """
+    opp: Entity = env.scene["opponent"]
+    pos_xy = torch.nan_to_num(opp.data.root_link_pos_w[:, :2], nan=0.0)
+    potential = (pos_xy * _tug_pull_dir(env)).sum(dim=1)
+    if not hasattr(env, "_tug_chain_potential_prev"):
+        env._tug_chain_potential_prev = potential.clone()
+    # Freshly reset envs: no spurious delta from the previous episode.
+    fresh = env.episode_length_buf <= 1
+    env._tug_chain_potential_prev[fresh] = potential[fresh]
+    delta = potential - env._tug_chain_potential_prev
+    env._tug_chain_potential_prev = potential.clone()
+    max_step = max_paid_rate * env.step_dt
+    return delta.clamp(-max_step, max_step)
+
+
+def tug_chain_trunk_lean_tracking(
+    env: ManagerBasedRlEnv,
+    target_pitch: float,
+    std: float = 0.10,
+    taut_length: float = 0.108,
+    gate_speed: float = 0.02,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Gaussian on trunk pitch vs ``target_pitch`` (roll pinned to 0), GATED on
+    ``_tug_chain_active_gate`` (opponent moving your way OR rope taut) so the
+    pull stance pays whenever there is genuine opposition but never as free
+    posing. ∈ [0, 1]. Same pitch/roll construction as tug_trunk_lean_tracking.
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+    quat = asset.data.root_link_quat_w
+    qw, qx, qy, qz = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
+    # pg = R^T @ (0,0,-1): pg_x = 2(wy - xz), pg_y = -2(yz + wx)
+    pg_x = torch.nan_to_num(2.0 * (qw * qy - qx * qz), nan=0.0)
+    pg_y = torch.nan_to_num(-2.0 * (qy * qz + qw * qx), nan=0.0)
+    err = (pg_x - math.sin(target_pitch)).square() + pg_y.square()
+    gauss = torch.exp(-err / (std * std))
+    return gauss * _tug_chain_active_gate(env, taut_length, gate_speed)
+
+
+def tug_chain_step_cadence_tracking(
+    env: ManagerBasedRlEnv,
+    sensor_name: str = "feet_ground_contact",
+    target_hz: float = 1.5,
+    std_hz: float = 0.75,
+    tau_s: float = 1.0,
+    taut_length: float = 0.108,
+    gate_speed: float = 0.02,
+) -> torch.Tensor:
+    """Gaussian on the EMA step cadence vs ``target_hz``, GATED on
+    ``_tug_chain_active_gate`` — ungated, the cadence term is farmed by
+    stepping in place next to a stationary opponent. ∈ [0, 1].
+
+    Cadence machinery identical to tug_step_cadence_tracking (contact-state
+    transitions / 2 per second, tau_s EMA); only the gate differs.
+    """
+    if sensor_name not in env.scene.sensors:
+        return torch.zeros(env.num_envs, device=env.device)
+    contacts = env.scene.sensors[sensor_name].data.found[:, :2]
+    fresh = env.episode_length_buf <= 1
+    if not hasattr(env, "_tug_chain_cadence_prev"):
+        env._tug_chain_cadence_prev = contacts.clone()
+        env._tug_chain_cadence_ema = torch.zeros(env.num_envs, device=env.device)
+    # Re-anchor buffers after resets so a respawned foot state isn't an edge.
+    env._tug_chain_cadence_prev[fresh] = contacts[fresh]
+    env._tug_chain_cadence_ema[fresh] = 0.0
+    edges = torch.any(contacts != env._tug_chain_cadence_prev, dim=1).float()
+    env._tug_chain_cadence_prev = contacts.clone()
+    inst = edges / (2.0 * env.step_dt)
+    alpha = env.step_dt / tau_s
+    env._tug_chain_cadence_ema += alpha * (inst - env._tug_chain_cadence_ema)
+    cadence = torch.nan_to_num(env._tug_chain_cadence_ema, nan=0.0)
+    gauss = torch.exp(-((cadence - target_hz) / std_hz).square())
+    return gauss * _tug_chain_active_gate(env, taut_length, gate_speed)
+
+
+def reset_tug_chain_opponent(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+    trunk_gap_range: tuple = (0.250, 0.255),
+    opponent_asset: str = "opponent",
+):
+    """Place the opponent duck back-to-back behind the learner, rope pre-tensioned.
+
+    Same pattern as ``reset_tug_cart`` (must be registered AFTER reset_base —
+    events run in dict insertion order — and reads the robot root from qpos
+    directly because root_link_pos_w lags until the next forward()). The
+    opponent spawns facing the learner (yaw + π), so both butt tow eyes face
+    each other and the cross-entity tendon links ring to ring horizontally
+    (same trunk z). The sampled trunk gap keeps the spawn ring distance a few
+    mm PAST the tendon's taut length, so the rope starts loaded — no free
+    slack phase at episode start. Also freezes the per-env pull direction
+    (robot spawn yaw) for the chain rewards. Non-accumulating by construction
+    (absolute pose write).
+    """
+    if env_ids is None or len(env_ids) == 0:
+        return
+    env_ids = env_ids.to(env.device)
+    robot: Entity = env.scene["robot"]
+    opp: Entity = env.scene[opponent_asset]
+
+    root = env.sim.data.qpos[env_ids][:, robot.indexing.free_joint_q_adr]
+    qw, qx, qy, qz = root[:, 3], root[:, 4], root[:, 5], root[:, 6]
+    yaw = torch.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+    cos_y, sin_y = torch.cos(yaw), torch.sin(yaw)
+
+    n = len(env_ids)
+    gap = (
+        torch.rand(n, device=env.device) * (trunk_gap_range[1] - trunk_gap_range[0])
+        + trunk_gap_range[0]
+    )
+    # Opponent trunk sits `gap` behind the learner along -pull_dir and faces
+    # back toward it (yaw + π); trunk z copies the robot's spawn height so the
+    # rope is horizontal at spawn.
+    yaw_opp = yaw + math.pi
+    pose = torch.zeros(n, 7, device=env.device)
+    pose[:, 0] = root[:, 0] - cos_y * gap
+    pose[:, 1] = root[:, 1] - sin_y * gap
+    pose[:, 2] = root[:, 2]
+    pose[:, 3] = torch.cos(yaw_opp / 2.0)
+    pose[:, 6] = torch.sin(yaw_opp / 2.0)
+    opp.write_root_link_pose_to_sim(pose, env_ids)
+    opp.write_root_link_velocity_to_sim(torch.zeros(n, 6, device=env.device), env_ids)
+
+    pull_dir = _tug_pull_dir(env)
+    pull_dir[env_ids, 0] = cos_y
+    pull_dir[env_ids, 1] = sin_y

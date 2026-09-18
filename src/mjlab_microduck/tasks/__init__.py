@@ -89,6 +89,11 @@ from .microduck_tug_env_cfg import (
     MicroduckTugShuffleRlCfg,
     MicroduckTugSteadyRlCfg,
 )
+from .microduck_tug_chain_env_cfg import (
+    make_microduck_tug_chain_env_cfg,
+    MicroduckTugChainShuffleRlCfg,
+    MicroduckTugChainSteadyRlCfg,
+)
 from .backlash import make_backlash_variant
 
 # Standard velocity task
@@ -312,6 +317,25 @@ register_mjlab_task(
     env_cfg=make_microduck_tug_env_cfg(style="shuffle"),
     play_env_cfg=make_microduck_tug_env_cfg(style="shuffle", play=True),
     rl_cfg=MicroduckTugShuffleRlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
+
+# 1v1 tug-CHAIN self-play — two ducks linked butt-ring to butt-ring on the
+# match cord; the opponent runs a frozen sled-tug ONNX policy (cross-adversary:
+# steady learner vs shuffle opponent and vice versa).
+register_mjlab_task(
+    task_id="Mjlab-Microduck-TugChain-Steady",
+    env_cfg=make_microduck_tug_chain_env_cfg(style="steady"),
+    play_env_cfg=make_microduck_tug_chain_env_cfg(style="steady", play=True),
+    rl_cfg=MicroduckTugChainSteadyRlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
+
+register_mjlab_task(
+    task_id="Mjlab-Microduck-TugChain-Shuffle",
+    env_cfg=make_microduck_tug_chain_env_cfg(style="shuffle"),
+    play_env_cfg=make_microduck_tug_chain_env_cfg(style="shuffle", play=True),
+    rl_cfg=MicroduckTugChainShuffleRlCfg,
     runner_cls=MicroduckOnPolicyRunner,
 )
 
