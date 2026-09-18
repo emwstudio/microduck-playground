@@ -82,9 +82,13 @@ CADENCE_STD_HZ = 0.75
 ROBOT_MAX_DISTANCE = 2.0
 CART_MAX_DISTANCE = 2.5
 FALLEN_TRUNK_Z = 0.055         # same fall criterion as the tug-of-war demo
+OVERLEAN_LIMIT = math.radians(35.0)  # v6 硬闸门: 超过即判死 — 挂绳白嫖进度在 v4/v5
+                                     # 被证明堵不住 (v4 挂平拖着走 / v5 挂到摔),
+                                     # AGENTS.md: 用硬状态门, 别指望小惩罚微推
 
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.mdp import dr
+from mjlab.envs.mdp import terminations as mjlab_terminations
 from mjlab.managers import (
     CurriculumTermCfg,
     EventTermCfg,
@@ -251,6 +255,15 @@ def make_microduck_tug_env_cfg(
     cfg.terminations["trunk_low"] = TerminationTermCfg(
         func=microduck_mdp.root_height_below,
         params={"min_height": FALLEN_TRUNK_Z},
+    )
+    # v6 HARD posture gate: leaning past 35° kills the episode. Soft posture
+    # rewards (v4: alive tilt gate / v5: tighter std) could not stop the policy
+    # from hanging nearly horizontal on the rope — the pull stance must be
+    # structural, not nudged. 35° keeps a strong athletic lean legal while
+    # making "hang on the rope" a death sentence.
+    cfg.terminations["overlean"] = TerminationTermCfg(
+        func=mjlab_terminations.bad_orientation,
+        params={"limit_angle": OVERLEAN_LIMIT},
     )
     # NaN guard for the robot is inherited from the velocity wiring (with the
     # feet_ground_contact sensor check); the cart gets its own state guard.
