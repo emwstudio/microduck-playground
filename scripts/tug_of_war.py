@@ -121,6 +121,11 @@ def main() -> None:
     parser.add_argument("--foot-friction", type=float, default=2.0,
                         help="foot sliding friction mu; sim default ~1.0 lets the rope "
                              "drag ducks instead of gripping (real PU sole ~2.0)")
+    parser.add_argument("--get-up", type=float, default=0.0, metavar="SECONDS",
+                        help="video mode: a duck down this long is stood back up at "
+                             "its spot (real pullers get up; keeps all 10 ducks "
+                             "visibly pulling). Rounds are then decided by the rope "
+                             "crossing a win line, never by team wipe. 0 = off.")
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--metrics", type=Path, default=None)
@@ -203,6 +208,7 @@ def main() -> None:
         steps = int(args.round_duration / control_dt)
         step = 0
         t_start = time.time()
+        down_time: dict[str, float] = {}
         kinds = {"red": args.red_kind, "blue": args.blue_kind}
         while step < steps:
             # Tug-style policies are self-directed: their twist slot was
@@ -232,7 +238,37 @@ def main() -> None:
                 renderer.update_scene(data, camera)
                 frame = renderer.render()
                 writer.append_data(frame if args.no_grade else grade_frame(frame))
-            if step * control_dt > 1.0:  # grace period: spawn transients
+            if args.get_up > 0:
+                # Video mode: downed ducks get back up after args.get_up seconds
+                # and keep pulling (real tug-of-war: you stumble, you recover).
+                from mjlab_microduck.robot.tug_of_war import FALLEN_TRUNK_Z, team_states
+                for rig in rigs:
+                    down = data.xpos[rig.trunk_body_id][2] < FALLEN_TRUNK_Z
+                    if down:
+                        down_time[rig.prefix] = down_time.get(rig.prefix, 0.0) + control_dt
+                    else:
+                        down_time[rig.prefix] = 0.0
+                    if down_time[rig.prefix] >= args.get_up:
+                        _, quat = spawns[rig.prefix]
+                        adr = rig.free_qpos_adr
+                        data.qpos[adr + 2] = TRUNK_Z0          # keep x, y
+                        data.qpos[adr + 3:adr + 7] = quat
+                        data.qvel[adr:adr + 6] = 0.0
+                        data.qpos[rig.joint_qpos_idx] = DEFAULT_POSE
+                        data.qvel[rig.joint_qvel_idx] = 0.0
+                        data.ctrl[rig.actuator_ids] = DEFAULT_POSE
+                        rig.last_action[:] = 0.0
+                        down_time[rig.prefix] = 0.0
+                states = team_states(model, data, rigs)
+                midpoint_x = (states["red"]["center_x"] + states["blue"]["center_x"]) / 2.0
+                if step * control_dt > 1.0:
+                    if midpoint_x < -args.win_x:
+                        winner, reason = "red", f"rope pulled past red line (midpoint {midpoint_x:+.2f} m)"
+                        break
+                    if midpoint_x > args.win_x:
+                        winner, reason = "blue", f"rope pulled past blue line (midpoint {midpoint_x:+.2f} m)"
+                        break
+            elif step * control_dt > 1.0:  # grace period: spawn transients
                 winner, reason = check_winner(model, data, rigs, args.win_x, MIN_FALLEN)
                 if winner:
                     break
