@@ -79,7 +79,11 @@ CADENCE_STD_HZ = 0.75
 
 # Bounds / fall criteria (per duck — any duck down ends the match)
 MAX_DISTANCE = 2.0
-FALLEN_TRUNK_Z = 0.055
+# v10: raised 0.055→0.065. The v9 shuffle policy learned a deep-crouch gait
+# that skated just above 5.5cm in training but dips below it in match
+# conditions (settle + pretension) — read as "fallen" constantly. Training
+# with a 1cm margin forces a higher stance. Match-side threshold unchanged.
+FALLEN_TRUNK_Z = 0.065
 OVERLEAN_LIMIT = math.radians(35.0)  # v6 hard posture gate, per duck in v9
 
 _FOOT_GEOMS = ("left_foot_collision", "right_foot_collision")

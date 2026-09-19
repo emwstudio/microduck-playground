@@ -84,7 +84,7 @@ def test_any_duck_down_ends_the_match():
         ] == pytest.approx(math.radians(35.0))
         assert cfg.terminations[f"trunk_low_{duck}"].params[
             "min_height"
-        ] == pytest.approx(0.055)
+        ] == pytest.approx(chain3s_mod.FALLEN_TRUNK_Z)
     assert "time_out" in cfg.terminations
 
 
