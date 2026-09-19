@@ -99,6 +99,11 @@ from .microduck_tug_chain3_env_cfg import (
     MicroduckTugChain3ShuffleRlCfg,
     MicroduckTugChain3SteadyRlCfg,
 )
+from .microduck_tug_chain3s_env_cfg import (
+    make_microduck_tug_chain3s_env_cfg,
+    MicroduckTugChain3sShuffleRlCfg,
+    MicroduckTugChain3sSteadyRlCfg,
+)
 from .backlash import make_backlash_variant
 
 # Standard velocity task
@@ -362,6 +367,50 @@ register_mjlab_task(
     play_env_cfg=make_microduck_tug_chain3_env_cfg(style="shuffle", play=True),
     rl_cfg=MicroduckTugChain3ShuffleRlCfg,
     runner_cls=MicroduckOnPolicyRunner,
+)
+
+
+# 3v3 tug-chain FULL self-play (v9) — no frozen ducks: all six ducks share one
+# learning policy. The custom runner wraps the match-level mjlab env in
+# TugChainSelfPlayVecEnv, which flattens (N matches × 6 ducks) into N·6 duck
+# rows for rsl_rl (obs 61D / action 14D per duck row; match-level done
+# broadcast to its 6 rows).
+class TugChainSelfPlayRunner(MicroduckOnPolicyRunner):
+    def __init__(self, env, train_cfg, log_dir=None, device="cpu", **kwargs):
+        from mjlab_microduck.tasks.microduck_tug_chain3s_env_cfg import (
+            make_chain3s_reward_spec,
+        )
+        from mjlab_microduck.tasks.tug_chain3s_vecenv import TugChainSelfPlayVecEnv
+
+        inner = env.unwrapped
+        spec = getattr(inner.cfg, "chain3s_spec", None)
+        if spec is None:
+            # tyro rebuilds the env cfg dataclass from its fields, dropping the
+            # non-field chain3s_spec attribute — rebuild it from the experiment
+            # name carried in the (intact) agent cfg.
+            experiment = train_cfg.get("experiment_name", "")
+            spec = make_chain3s_reward_spec(
+                "shuffle" if "shuffle" in experiment else "steady"
+            )
+        super().__init__(
+            TugChainSelfPlayVecEnv(inner, spec), train_cfg, log_dir, device, **kwargs
+        )
+
+
+register_mjlab_task(
+    task_id="Mjlab-Microduck-TugChain3S-Steady",
+    env_cfg=make_microduck_tug_chain3s_env_cfg(style="steady"),
+    play_env_cfg=make_microduck_tug_chain3s_env_cfg(style="steady", play=True),
+    rl_cfg=MicroduckTugChain3sSteadyRlCfg,
+    runner_cls=TugChainSelfPlayRunner,
+)
+
+register_mjlab_task(
+    task_id="Mjlab-Microduck-TugChain3S-Shuffle",
+    env_cfg=make_microduck_tug_chain3s_env_cfg(style="shuffle"),
+    play_env_cfg=make_microduck_tug_chain3s_env_cfg(style="shuffle", play=True),
+    rl_cfg=MicroduckTugChain3sShuffleRlCfg,
+    runner_cls=TugChainSelfPlayRunner,
 )
 
 # Backlash variants — ±1° serial gear play per servo + encoder-through-backlash

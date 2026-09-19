@@ -9430,3 +9430,423 @@ def reset_tug_chain3_team(
     pull_dir = _tug_pull_dir(env)
     pull_dir[env_ids, 0] = cos_y
     pull_dir[env_ids, 1] = sin_y
+
+
+# =============================================================================
+# Tug-chain-3s task — 3v3 FULL self-play (all 6 ducks are learning agents)
+# =============================================================================
+# v8 (learner + 5 frozen v7 ducks) hit its training metrics but lost the match
+# badly: 94% floor time in 5v5 — worse than v7. Root cause: a frozen duck's
+# dynamics are nothing like a live policy's — the learner leaned on frozen
+# teammates' rigid support, and in the match everyone leans on everyone and
+# the chain collapses together. v9: NO frozen ducks — all 6 ducks share ONE
+# learning policy (symmetric game; per-style runs produce the two teams'
+# match policies).
+#
+# Engineering shape: the mjlab env holds N matches (6 entities each); a thin
+# VecEnv wrapper (tug_chain3s_vecenv.py) flattens them to 6N duck rows for
+# rsl_rl — obs (6N, 61) from the ``tug_chain3s_duck_obs`` term, actions
+# (6N, 14) → (N, 84) into the 6 per-duck joint_pos terms, rewards (6N,) from
+# the (N, 6) functions below, match-level done broadcast to its 6 rows.
+
+#: Duck entity names in chain order is NOT the obs/action order — this tuple
+#: is the flattening order (row = match * 6 + slot). "robot" is the red
+#: MIDDLE duck (kept named "robot" so the velocity recipe's robot-targeted
+#: wiring and the ONNX export metadata patch keep working).
+CHAIN3S_DUCKS = ("robot", "red_inner", "red_outer", "blue_inner", "blue_mid", "blue_outer")
+#: Team sign per duck: red ducks are paid when the midpoint moves along
+#: +pull_dir (the red facing direction at spawn), blue ducks the opposite.
+CHAIN3S_TEAM_SIGN = (1.0, 1.0, 1.0, -1.0, -1.0, -1.0)
+#: Per-duck butt-ring cord: (other entity, other site, is_center_cord). Every
+#: duck is pulled at rope_hook (enemy side); the teammate cords anchor the
+#: other end on the trailing/leading duck's rope_hook_chest.
+CHAIN3S_BUTT_CORD = {
+    "robot": ("red_inner", "rope_hook_chest", False),
+    "red_inner": ("blue_inner", "rope_hook", True),
+    "red_outer": ("robot", "rope_hook_chest", False),
+    "blue_inner": ("red_inner", "rope_hook", True),
+    "blue_mid": ("blue_inner", "rope_hook_chest", False),
+    "blue_outer": ("blue_mid", "rope_hook_chest", False),
+}
+
+
+def _chain3s_site_pos(env: ManagerBasedRlEnv, duck: str, site: str) -> torch.Tensor:
+    """World position of one duck's site, per env, NaN-safe (cached ids)."""
+    cache = env.__dict__.setdefault("_chain3s_site_ids", {})
+    key = (duck, site)
+    if key not in cache:
+        e: Entity = env.scene[duck]
+        ids, _ = e.find_sites(site, preserve_order=True)
+        cache[key] = (e, ids[0])
+    e, idx = cache[key]
+    return torch.nan_to_num(e.data.site_pos_w[:, idx], nan=0.0)
+
+
+def _chain3s_midpoint(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Chain midpoint along the frozen pull axis: mean of the two inner ducks'
+    projected trunk positions (the match's win-rule midpoint). (N,), NaN-safe."""
+    r0: Entity = env.scene["red_inner"]
+    b0: Entity = env.scene["blue_inner"]
+    u = _tug_pull_dir(env)
+    pr = (torch.nan_to_num(r0.data.root_link_pos_w[:, :2], nan=0.0) * u).sum(dim=1)
+    pb = (torch.nan_to_num(b0.data.root_link_pos_w[:, :2], nan=0.0) * u).sum(dim=1)
+    return 0.5 * (pr + pb)
+
+
+def _chain3s_midpoint_vel(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Midpoint velocity along the pull axis (N,), NaN-safe."""
+    r0: Entity = env.scene["red_inner"]
+    b0: Entity = env.scene["blue_inner"]
+    u = _tug_pull_dir(env)
+    vr = (torch.nan_to_num(r0.data.root_link_lin_vel_w[:, :2], nan=0.0) * u).sum(dim=1)
+    vb = (torch.nan_to_num(b0.data.root_link_lin_vel_w[:, :2], nan=0.0) * u).sum(dim=1)
+    return 0.5 * (vr + vb)
+
+
+def _chain3s_butt_cord_taut(
+    env: ManagerBasedRlEnv,
+    teammate_taut: float,
+    center_taut: float,
+) -> torch.Tensor:
+    """Per-duck butt-cord tautness (N, 6) float — geometric site-distance check
+    against each cord's taut length (no tendon-force sensor needed)."""
+    cols = []
+    for duck in CHAIN3S_DUCKS:
+        other, other_site, is_center = CHAIN3S_BUTT_CORD[duck]
+        a = _chain3s_site_pos(env, duck, "rope_hook")
+        b = _chain3s_site_pos(env, other, other_site)
+        rope_len = torch.linalg.norm(b - a, dim=1)
+        taut = center_taut if is_center else teammate_taut
+        cols.append((rope_len >= taut).float())
+    return torch.stack(cols, dim=1)
+
+
+def _chain3s_active_gate(
+    env: ManagerBasedRlEnv,
+    teammate_taut: float,
+    center_taut: float,
+    gate_speed: float = 0.02,
+) -> torch.Tensor:
+    """Per-duck 0→1 style gate (N, 6): the duck's butt cord taut OR the chain
+    midpoint moving toward that duck's team (sign-adjusted). The stance must
+    pay through a standstill grind but never as free posing on a slack rope.
+    """
+    signs = torch.tensor(CHAIN3S_TEAM_SIGN, device=env.device)
+    moving = (_chain3s_midpoint_vel(env)[:, None] * signs[None, :] / gate_speed).clamp(0.0, 1.0)
+    return torch.maximum(moving, _chain3s_butt_cord_taut(env, teammate_taut, center_taut))
+
+
+def tug_chain3s_team_progress(
+    env: ManagerBasedRlEnv,
+    max_paid_rate: float = 0.4,
+) -> torch.Tensor:
+    """Potential-based team shaping (N, 6): Δ of the chain midpoint along the
+    pull axis, signed per team (red +, blue −), rate-capped per step.
+
+    Every duck of a team gets the same team delta — dragging the midpoint your
+    way pays, losing it charges, holding pays zero. Same anti-jackpot pattern
+    as tug_cart_progress.
+    """
+    potential = _chain3s_midpoint(env)
+    if not hasattr(env, "_chain3s_potential_prev"):
+        env._chain3s_potential_prev = potential.clone()
+    fresh = env.episode_length_buf <= 1
+    env._chain3s_potential_prev[fresh] = potential[fresh]
+    delta = (potential - env._chain3s_potential_prev).clamp(
+        -max_paid_rate * env.step_dt, max_paid_rate * env.step_dt
+    )
+    env._chain3s_potential_prev = potential.clone()
+    signs = torch.tensor(CHAIN3S_TEAM_SIGN, device=env.device)
+    return delta[:, None] * signs[None, :]
+
+
+def tug_chain3s_taut_alive(
+    env: ManagerBasedRlEnv,
+    teammate_taut: float,
+    center_taut: float,
+    max_tilt_cos: float = -0.87,
+) -> torch.Tensor:
+    """Per-duck survival pay (N, 6) ∈ {0,1}: ONLY while the duck's own butt
+    cord is taut AND its trunk is genuinely upright (tilt < ~30°, same
+    projected-gravity test as tug_taut_alive). A duck lying on the rope earns
+    nothing — and in self-play its fall ends the match for everyone anyway.
+    """
+    taut = _chain3s_butt_cord_taut(env, teammate_taut, center_taut)
+    cols = []
+    for duck in CHAIN3S_DUCKS:
+        quat = env.scene[duck].data.root_link_quat_w
+        qw, qx, qy, qz = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
+        pg_z = torch.nan_to_num(1.0 - 2.0 * (qx * qx + qy * qy), nan=-1.0) * -1.0
+        cols.append((pg_z < max_tilt_cos).float())
+    upright = torch.stack(cols, dim=1)
+    return taut * upright
+
+
+def tug_chain3s_trunk_lean(
+    env: ManagerBasedRlEnv,
+    target_pitch: float,
+    std: float = 0.10,
+    teammate_taut: float = 0.1304,
+    center_taut: float = 0.1678,
+    gate_speed: float = 0.02,
+) -> torch.Tensor:
+    """Per-duck Gaussian on trunk pitch vs ``target_pitch`` (roll pinned to 0),
+    GATED on ``_chain3s_active_gate``. (N, 6) ∈ [0, 1]. The lean direction is
+    expressed in each duck's OWN facing frame: pg_x sign flips with the duck's
+    yaw, so red (facing +pull_dir) and blue (facing −pull_dir) both lean butt-
+    toward-the-enemy at the same signed target."""
+    gate = _chain3s_active_gate(env, teammate_taut, center_taut, gate_speed)
+    signs = torch.tensor(CHAIN3S_TEAM_SIGN, device=env.device)
+    cols = []
+    for i, duck in enumerate(CHAIN3S_DUCKS):
+        quat = env.scene[duck].data.root_link_quat_w
+        qw, qx, qy, qz = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
+        # pg = R^T @ (0,0,-1): pg_x = 2(wy - xz), pg_y = -2(yz + wx)
+        pg_x = torch.nan_to_num(2.0 * (qw * qy - qx * qz), nan=0.0)
+        pg_y = torch.nan_to_num(-2.0 * (qy * qz + qw * qx), nan=0.0)
+        # Blue ducks face the opposite way: their butt-toward-enemy lean is the
+        # mirror of red's, so flip the pitch target by team sign.
+        err = (pg_x - signs[i] * math.sin(target_pitch)).square() + pg_y.square()
+        cols.append(torch.exp(-err / (std * std)))
+    return torch.stack(cols, dim=1) * gate
+
+
+def tug_chain3s_step_cadence(
+    env: ManagerBasedRlEnv,
+    sensor_prefix: str = "feet_ground_contact",
+    target_hz: float = 1.5,
+    std_hz: float = 0.75,
+    tau_s: float = 1.0,
+    teammate_taut: float = 0.1304,
+    center_taut: float = 0.1678,
+    gate_speed: float = 0.02,
+) -> torch.Tensor:
+    """Per-duck Gaussian on EMA step cadence vs ``target_hz``, GATED on
+    ``_chain3s_active_gate``. (N, 6) ∈ [0, 1]. Same transition-count EMA as
+    tug_step_cadence_tracking, one (N, 6) buffer pair for all ducks.
+    """
+    gate = _chain3s_active_gate(env, teammate_taut, center_taut, gate_speed)
+    contacts = torch.stack(
+        [
+            env.scene.sensors[f"{sensor_prefix}_{duck}"].data.found[:, :2]
+            for duck in CHAIN3S_DUCKS
+        ],
+        dim=1,
+    )  # (N, 6, 2)
+    fresh = env.episode_length_buf <= 1
+    if not hasattr(env, "_chain3s_cadence_prev"):
+        env._chain3s_cadence_prev = contacts.clone()
+        env._chain3s_cadence_ema = torch.zeros(
+            env.num_envs, len(CHAIN3S_DUCKS), device=env.device
+        )
+    env._chain3s_cadence_prev[fresh] = contacts[fresh]
+    env._chain3s_cadence_ema[fresh] = 0.0
+    edges = torch.any(contacts != env._chain3s_cadence_prev, dim=2).float()  # (N, 6)
+    env._chain3s_cadence_prev = contacts.clone()
+    inst = edges / (2.0 * env.step_dt)
+    alpha = env.step_dt / tau_s
+    env._chain3s_cadence_ema += alpha * (inst - env._chain3s_cadence_ema)
+    cadence = torch.nan_to_num(env._chain3s_cadence_ema, nan=0.0)
+    return torch.exp(-((cadence - target_hz) / std_hz).square()) * gate
+
+
+def tug_chain3s_head_home(env: ManagerBasedRlEnv, std: float = 0.5) -> torch.Tensor:
+    """Per-duck Gaussian keeping the 4 neck/head joints near HOME (N, 6) ∈
+    (0, 1]. v9 has no head command slot (zero-padded obs), so this replaces
+    head_pose_tracking with a plain HOME-pin — the 280 g head is a
+    counterweight and must not go slack. Per-joint Gaussian, mean over joints.
+    """
+    cols = []
+    for duck in CHAIN3S_DUCKS:
+        e: Entity = env.scene[duck]
+        ids = _servo_joint_ids(env, e)
+        q_rel = e.data.joint_pos[:, ids] - e.data.default_joint_pos[0, ids]
+        neck = q_rel[:, 5:9]  # canonical layout: neck/head = servo idx 5..8
+        cols.append(torch.exp(-(neck / std).square()).mean(dim=1))
+    return torch.stack(cols, dim=1)
+
+
+def tug_chain3s_action_rate(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Per-duck action rate L2 (N, 6) ≥ 0 — Σ (a_t − a_{t−1})² over the duck's
+    14 dims, sliced out of the shared action manager history by term name."""
+    am = env.action_manager
+    cols = []
+    for duck in CHAIN3S_DUCKS:
+        name = "joint_pos" if duck == "robot" else f"joint_pos_{duck}"
+        idx = am.active_terms.index(name)
+        sl = slice(idx * 14, (idx + 1) * 14)
+        cols.append((am.action[:, sl] - am.prev_action[:, sl]).square().sum(dim=1))
+    return torch.stack(cols, dim=1)
+
+
+def tug_chain3s_body_ang_vel(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Per-duck trunk angular velocity L2² (N, 6) ≥ 0 (motion-blocker
+    regularizer, kept LOW like the velocity recipe)."""
+    return torch.stack(
+        [
+            torch.nan_to_num(
+                env.scene[duck].data.root_link_ang_vel_w, nan=0.0
+            ).square().sum(dim=1)
+            for duck in CHAIN3S_DUCKS
+        ],
+        dim=1,
+    )
+
+
+def tug_chain3s_joint_limits(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Per-duck soft joint-limit violation (N, 6) ≥ 0 — mjlab's
+    joint_pos_limits semantics, evaluated per duck."""
+    from mjlab.envs.mdp import rewards as _mjlab_rewards
+
+    return torch.stack(
+        [
+            _mjlab_rewards.joint_pos_limits(env, SceneEntityCfg(duck))
+            for duck in CHAIN3S_DUCKS
+        ],
+        dim=1,
+    )
+
+
+def tug_chain3s_self_collision(
+    env: ManagerBasedRlEnv, sensor_prefix: str = "self_collision"
+) -> torch.Tensor:
+    """Per-duck self-collision contact count (N, 6) ≥ 0."""
+    return torch.stack(
+        [
+            env.scene.sensors[f"{sensor_prefix}_{duck}"].data.found.sum(dim=1).float()
+            for duck in CHAIN3S_DUCKS
+        ],
+        dim=1,
+    )
+
+
+def tug_chain3s_foot_slip(
+    env: ManagerBasedRlEnv, sensor_prefix: str = "feet_ground_contact"
+) -> torch.Tensor:
+    """Per-duck foot slip (N, 6) ≥ 0: Σ_feet |v_xy|² while in contact. Always
+    active — v9 has no velocity command, so the velocity recipe's command gate
+    is replaced by the taut/style gates on the positive terms."""
+    cache = env.__dict__.setdefault("_chain3s_foot_site_ids", {})
+    cols = []
+    for duck in CHAIN3S_DUCKS:
+        if duck not in cache:
+            e: Entity = env.scene[duck]
+            ids, _ = e.find_sites(("left_foot", "right_foot"), preserve_order=True)
+            cache[duck] = (e, ids)
+        e, ids = cache[duck]
+        in_contact = (
+            env.scene.sensors[f"{sensor_prefix}_{duck}"].data.found[:, :2] > 0
+        ).float()
+        vel_xy = torch.nan_to_num(e.data.site_lin_vel_w[:, ids, :2], nan=0.0)
+        cols.append((vel_xy.norm(dim=-1).square() * in_contact).sum(dim=1))
+    return torch.stack(cols, dim=1)
+
+
+def tug_chain3s_duck_obs(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """(N, 6·61) self-play obs: one 61D deployment-contract row per duck,
+    flattened in CHAIN3S_DUCKS order (row = match·6 + slot).
+
+    Per duck: ang_vel(3) | proj_gravity(3) | joint_pos_rel(14) |
+    joint_vel(14) | last_action(14) | twist(3 zeros) | head_pose(4 zeros) |
+    body_pose(6 zeros). Clean reads (no noise/delay), matching the deployment
+    rehearsal path (scripts/infer_policy.py / robot/tug_of_war.py); the BAM
+    actuator's own delay still applies on the action side for every duck.
+    """
+    am = env.action_manager
+    rows = []
+    for duck in CHAIN3S_DUCKS:
+        e: Entity = env.scene[duck]
+        ids = _servo_joint_ids(env, e)
+        d = e.data
+        term_name = "joint_pos" if duck == "robot" else f"joint_pos_{duck}"
+        idx = am.active_terms.index(term_name)
+        last_action = am.action[:, idx * 14 : (idx + 1) * 14]
+        rows.append(
+            torch.cat(
+                [
+                    torch.nan_to_num(d.root_link_ang_vel_b, nan=0.0),
+                    torch.nan_to_num(d.projected_gravity_b, nan=0.0),
+                    torch.nan_to_num(
+                        d.joint_pos[:, ids] - d.default_joint_pos[0, ids], nan=0.0
+                    ),
+                    torch.nan_to_num(d.joint_vel[:, ids], nan=0.0),
+                    last_action,
+                    torch.zeros(env.num_envs, 13, device=env.device),
+                ],
+                dim=1,
+            )
+        )
+    return torch.cat(rows, dim=1)
+
+
+def reset_tug_chain3s_match(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+    xy_range: float = 0.5,
+    z_range: tuple = (0.12, 0.13),
+    joint_noise: float = 0.05,
+    teammate_gap_range: tuple = (0.250, 0.255),
+    center_gap_range: tuple = (0.310, 0.315),
+):
+    """Spawn a full 3v3 match per env: random anchor pose for the red middle
+    duck ("robot"), the other five laid out along the pull axis with
+    pre-tensioned cords, all six at standing DEFAULT_POSE + small joint noise.
+
+    Self-contained replacement for the velocity recipe's reset_base +
+    reset_robot_joints (which only know the "robot" entity). Red ducks face
+    the anchor yaw direction f (their pull direction — frozen into
+    ``_tug_pull_dir`` for the rewards); blue ducks face −f. Non-accumulating
+    (absolute pose/joint writes).
+    """
+    if env_ids is None or len(env_ids) == 0:
+        return
+    env_ids = env_ids.to(env.device)
+    n = len(env_ids)
+    dev = env.device
+    origins = env.scene.terrain.env_origins[env_ids]
+
+    ax = origins[:, 0] + (torch.rand(n, device=dev) * 2 - 1) * xy_range
+    ay = origins[:, 1] + (torch.rand(n, device=dev) * 2 - 1) * xy_range
+    az = origins[:, 2] + z_range[0] + torch.rand(n, device=dev) * (z_range[1] - z_range[0])
+    yaw = (torch.rand(n, device=dev) * 2 - 1) * math.pi
+    cos_y, sin_y = torch.cos(yaw), torch.sin(yaw)
+
+    def _sample(gap_range: tuple) -> torch.Tensor:
+        return torch.rand(n, device=dev) * (gap_range[1] - gap_range[0]) + gap_range[0]
+
+    # Signed offsets along +f from the anchor (negative = center/blue side).
+    s_red_inner = -_sample(teammate_gap_range)
+    s_red_outer = _sample(teammate_gap_range)
+    s_blue_inner = s_red_inner - _sample(center_gap_range)
+    s_blue_mid = s_blue_inner - _sample(teammate_gap_range)
+    s_blue_outer = s_blue_mid - _sample(teammate_gap_range)
+    offsets = {
+        "robot": torch.zeros(n, device=dev),
+        "red_inner": s_red_inner,
+        "red_outer": s_red_outer,
+        "blue_inner": s_blue_inner,
+        "blue_mid": s_blue_mid,
+        "blue_outer": s_blue_outer,
+    }
+    for duck in CHAIN3S_DUCKS:
+        e: Entity = env.scene[duck]
+        flip = duck.startswith("blue")
+        yaw_d = yaw + (math.pi if flip else 0.0)
+        pose = torch.zeros(n, 7, device=dev)
+        pose[:, 0] = ax + cos_y * offsets[duck]
+        pose[:, 1] = ay + sin_y * offsets[duck]
+        pose[:, 2] = az
+        pose[:, 3] = torch.cos(yaw_d / 2.0)
+        pose[:, 6] = torch.sin(yaw_d / 2.0)
+        e.write_root_link_pose_to_sim(pose, env_ids)
+        e.write_root_link_velocity_to_sim(torch.zeros(n, 6, device=dev), env_ids)
+        # Standing start from a settled stand, not exact HOME (deployment
+        # handoff condition) — same ±0.05 convention as the velocity recipe.
+        ids = _servo_joint_ids(env, e)
+        default = e.data.default_joint_pos[0, ids]
+        q = default.unsqueeze(0) + (torch.rand(n, len(ids), device=dev) * 2 - 1) * joint_noise
+        e.write_joint_state_to_sim(q, torch.zeros(n, len(ids), device=dev), ids, env_ids)
+
+    pull_dir = _tug_pull_dir(env)
+    pull_dir[env_ids, 0] = cos_y
+    pull_dir[env_ids, 1] = sin_y
