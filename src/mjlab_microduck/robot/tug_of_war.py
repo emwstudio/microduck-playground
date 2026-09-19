@@ -725,11 +725,17 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
 
     # Rope chain, far red → center → far blue. Two cords per link (left/right
     # waist sites) so a link transmits no yaw torque between teammates.
+    # CRITICAL: taut length is RING-to-RING, not trunk-to-trunk — the butt ring
+    # sits 68.6mm and the chest ring 46.0mm inside the trunk frame, so a
+    # trunk-distance taut length leaves the cord slack forever (the rope was
+    # purely decorative in every match before this fix; tug policies leaned
+    # against tension that never came and toppled).
+    _RING_OFF = {"rope_hook": abs(RING_LOCAL_X), "rope_hook_chest": CHEST_LOCAL[0]}
     chain = list(reversed(red)) + blue
     for pa, pb in zip(chain[:-1], chain[1:]):
         nominal = gap if pa == red[0] else spacing
-        link_len = nominal + ROPE_SLACK
         site_a, site_b = _span_hook_sites(pa, pb, red)
+        link_len = nominal - _RING_OFF[site_a] - _RING_OFF[site_b] + ROPE_SLACK
         cord = parent.add_tendon(
             name=f"tug_{pa or 'r0_'}{pb}cord",
             stiffness=ROPE_STIFFNESS,
