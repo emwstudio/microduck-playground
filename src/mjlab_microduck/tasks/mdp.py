@@ -9212,3 +9212,221 @@ def reset_tug_chain_opponent(
     pull_dir = _tug_pull_dir(env)
     pull_dir[env_ids, 0] = cos_y
     pull_dir[env_ids, 1] = sin_y
+
+
+# =============================================================================
+# Tug-chain-3 task — 3v3 duck tug-of-war, learner = red MIDDLE duck
+# =============================================================================
+# v7 (1v1) match reality check: rounds decided by the rope line correctly, but
+# ducks still spent 56% of the time on the floor (target <20%). Two root
+# causes, both addressed here:
+#   1. In a match the MIDDLE duck of each team is loaded from BOTH sides
+#      (chest ring pulled by its trailing teammate, butt ring pulled by the
+#      enemy chain) — a 1v1 chain never produces that工况.
+#   2. v7 terminated the episode when the opponent fell (~3 s mean rounds), so
+#      the policy never experienced a long grind. Here fallen frozen ducks
+#      stay in the sim as dead weight on the rope, exactly like the match.
+#
+# Layout (match geometry, robot/tug_of_war.py): per team, inner/middle/outer
+# ducks at 0.24 m trunk spacing; the two inner ducks sit 0.30 m apart across
+# the center line. The learner is the red middle duck ("robot"); red_inner /
+# red_outer run frozen tugchain_steady_v7, blue_inner/mid/outer run frozen
+# tugchain_shuffle_v7. Every duck is pulled at its butt ring (rope_hook,
+# enemy side) and pulls its trailing teammate with its chest ring
+# (rope_hook_chest) — the force path goes through the body.
+
+#: Frozen duck entity names, in chain order from red outer to blue outer.
+CHAIN3_FROZEN_ENTITIES = (
+    "red_inner",
+    "red_outer",
+    "blue_inner",
+    "blue_mid",
+    "blue_outer",
+)
+
+
+def _tug_chain3_midpoint(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Rope-chain midpoint along the frozen pull axis: mean of the two INNER
+    ducks' projected trunk positions (same midpoint as the match's win rule).
+    NaN-safe."""
+    r0: Entity = env.scene["red_inner"]
+    b0: Entity = env.scene["blue_inner"]
+    u = _tug_pull_dir(env)
+    pr = (torch.nan_to_num(r0.data.root_link_pos_w[:, :2], nan=0.0) * u).sum(dim=1)
+    pb = (torch.nan_to_num(b0.data.root_link_pos_w[:, :2], nan=0.0) * u).sum(dim=1)
+    return 0.5 * (pr + pb)
+
+
+def tug_chain3_progress(
+    env: ManagerBasedRlEnv,
+    max_paid_rate: float = 0.4,
+) -> torch.Tensor:
+    """Potential-based shaping: Δ of the rope-chain MIDPOINT along pull_dir.
+
+    The midpoint moving toward the red (learner) side pays (Δ > 0), sliding
+    toward blue charges (Δ < 0), holding pays zero — the same anti-jackpot
+    rate-capped pattern as tug_cart_progress / tug_chain_progress, but the
+    tracked quantity is the match's actual win condition. NaN-safe.
+    """
+    potential = _tug_chain3_midpoint(env)
+    if not hasattr(env, "_tug_chain3_potential_prev"):
+        env._tug_chain3_potential_prev = potential.clone()
+    # Freshly reset envs: no spurious delta from the previous episode.
+    fresh = env.episode_length_buf <= 1
+    env._tug_chain3_potential_prev[fresh] = potential[fresh]
+    delta = potential - env._tug_chain3_potential_prev
+    env._tug_chain3_potential_prev = potential.clone()
+    max_step = max_paid_rate * env.step_dt
+    return delta.clamp(-max_step, max_step)
+
+
+def _tug_chain3_active_gate(
+    env: ManagerBasedRlEnv,
+    taut_length: float,
+    gate_speed: float = 0.02,
+) -> torch.Tensor:
+    """0→1 style gate: the midpoint moving toward the red side OR the
+    learner's butt cord (robot/rope_hook ↔ red_inner/rope_hook_chest) taut.
+
+    Same rationale as the 1v1 chain gate: against live opponents the cord
+    stays taut through a standstill grind, and the pull stance must pay there
+    — but posing with a slack rope must pay nothing. ∈ [0, 1].
+    """
+    r0: Entity = env.scene["red_inner"]
+    b0: Entity = env.scene["blue_inner"]
+    u = _tug_pull_dir(env)
+    vr = (torch.nan_to_num(r0.data.root_link_lin_vel_w[:, :2], nan=0.0) * u).sum(dim=1)
+    vb = (torch.nan_to_num(b0.data.root_link_lin_vel_w[:, :2], nan=0.0) * u).sum(dim=1)
+    moving = ((0.5 * (vr + vb)) / gate_speed).clamp(0.0, 1.0)
+    rope_len = _tug_rope_length(env, "rope_hook", "rope_hook_chest", "red_inner")
+    taut = (rope_len >= taut_length).float()
+    return torch.maximum(moving, taut)
+
+
+def tug_chain3_trunk_lean_tracking(
+    env: ManagerBasedRlEnv,
+    target_pitch: float,
+    std: float = 0.10,
+    taut_length: float = 0.1304,
+    gate_speed: float = 0.02,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Gaussian on trunk pitch vs ``target_pitch`` (roll pinned to 0), GATED on
+    ``_tug_chain3_active_gate``. ∈ [0, 1]. Same construction as
+    tug_chain_trunk_lean_tracking; only the gate differs.
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+    quat = asset.data.root_link_quat_w
+    qw, qx, qy, qz = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
+    # pg = R^T @ (0,0,-1): pg_x = 2(wy - xz), pg_y = -2(yz + wx)
+    pg_x = torch.nan_to_num(2.0 * (qw * qy - qx * qz), nan=0.0)
+    pg_y = torch.nan_to_num(-2.0 * (qy * qz + qw * qx), nan=0.0)
+    err = (pg_x - math.sin(target_pitch)).square() + pg_y.square()
+    gauss = torch.exp(-err / (std * std))
+    return gauss * _tug_chain3_active_gate(env, taut_length, gate_speed)
+
+
+def tug_chain3_step_cadence_tracking(
+    env: ManagerBasedRlEnv,
+    sensor_name: str = "feet_ground_contact",
+    target_hz: float = 1.5,
+    std_hz: float = 0.75,
+    tau_s: float = 1.0,
+    taut_length: float = 0.1304,
+    gate_speed: float = 0.02,
+) -> torch.Tensor:
+    """Gaussian on the EMA step cadence vs ``target_hz``, GATED on
+    ``_tug_chain3_active_gate``. ∈ [0, 1]. Cadence machinery identical to
+    tug_chain_step_cadence_tracking (own buffers); only the gate differs.
+    """
+    if sensor_name not in env.scene.sensors:
+        return torch.zeros(env.num_envs, device=env.device)
+    contacts = env.scene.sensors[sensor_name].data.found[:, :2]
+    fresh = env.episode_length_buf <= 1
+    if not hasattr(env, "_tug_chain3_cadence_prev"):
+        env._tug_chain3_cadence_prev = contacts.clone()
+        env._tug_chain3_cadence_ema = torch.zeros(env.num_envs, device=env.device)
+    # Re-anchor buffers after resets so a respawned foot state isn't an edge.
+    env._tug_chain3_cadence_prev[fresh] = contacts[fresh]
+    env._tug_chain3_cadence_ema[fresh] = 0.0
+    edges = torch.any(contacts != env._tug_chain3_cadence_prev, dim=1).float()
+    env._tug_chain3_cadence_prev = contacts.clone()
+    inst = edges / (2.0 * env.step_dt)
+    alpha = env.step_dt / tau_s
+    env._tug_chain3_cadence_ema += alpha * (inst - env._tug_chain3_cadence_ema)
+    cadence = torch.nan_to_num(env._tug_chain3_cadence_ema, nan=0.0)
+    gauss = torch.exp(-((cadence - target_hz) / std_hz).square())
+    return gauss * _tug_chain3_active_gate(env, taut_length, gate_speed)
+
+
+def reset_tug_chain3_team(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+    teammate_gap_range: tuple = (0.250, 0.255),
+    center_gap_range: tuple = (0.310, 0.315),
+):
+    """Lay out the 5 frozen ducks around the learner along the pull axis.
+
+    Same pattern as ``reset_tug_cart`` / ``reset_tug_chain_opponent``: must be
+    registered AFTER reset_base (dict insertion order) and reads the robot
+    root from qpos directly (root_link_pos_w lags until the next forward()).
+
+    The learner is the red MIDDLE duck; the chain extends along its facing
+    direction ``f`` (= the frozen pull direction): red_outer sits ``+f`` (away
+    from center), red_inner ``-f`` (toward center), then blue_inner / blue_mid
+    / blue_outer further ``-f`` at teammate spacing, with the red_inner ↔
+    blue_inner pair separated by the center gap. Red ducks face ``f`` (match:
+    -x), blue ducks face ``-f`` (yaw + π) — butt rings toward the enemy, chest
+    rings toward the trailing teammate. All ducks copy the learner's spawn
+    trunk z so every cord starts horizontal, and each gap carries a few mm of
+    pre-tension past its cord's taut length. Also freezes the per-env pull
+    direction for the chain3 rewards. Non-accumulating (absolute pose writes).
+    """
+    if env_ids is None or len(env_ids) == 0:
+        return
+    env_ids = env_ids.to(env.device)
+    robot: Entity = env.scene["robot"]
+
+    root = env.sim.data.qpos[env_ids][:, robot.indexing.free_joint_q_adr]
+    qw, qx, qy, qz = root[:, 3], root[:, 4], root[:, 5], root[:, 6]
+    yaw = torch.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+    cos_y, sin_y = torch.cos(yaw), torch.sin(yaw)
+
+    n = len(env_ids)
+
+    def _sample(gap_range: tuple) -> torch.Tensor:
+        return (
+            torch.rand(n, device=env.device) * (gap_range[1] - gap_range[0])
+            + gap_range[0]
+        )
+
+    # Signed offsets along +f for each frozen duck (negative = center side).
+    s_red_inner = -_sample(teammate_gap_range)
+    s_red_outer = _sample(teammate_gap_range)
+    s_blue_inner = s_red_inner - _sample(center_gap_range)
+    s_blue_mid = s_blue_inner - _sample(teammate_gap_range)
+    s_blue_outer = s_blue_mid - _sample(teammate_gap_range)
+    placements = {
+        "red_inner": (s_red_inner, False),
+        "red_outer": (s_red_outer, False),
+        "blue_inner": (s_blue_inner, True),
+        "blue_mid": (s_blue_mid, True),
+        "blue_outer": (s_blue_outer, True),
+    }
+    for name, (offset, flip) in placements.items():
+        duck: Entity = env.scene[name]
+        yaw_d = yaw + (math.pi if flip else 0.0)
+        pose = torch.zeros(n, 7, device=env.device)
+        pose[:, 0] = root[:, 0] + cos_y * offset
+        pose[:, 1] = root[:, 1] + sin_y * offset
+        pose[:, 2] = root[:, 2]
+        pose[:, 3] = torch.cos(yaw_d / 2.0)
+        pose[:, 6] = torch.sin(yaw_d / 2.0)
+        duck.write_root_link_pose_to_sim(pose, env_ids)
+        duck.write_root_link_velocity_to_sim(
+            torch.zeros(n, 6, device=env.device), env_ids
+        )
+
+    pull_dir = _tug_pull_dir(env)
+    pull_dir[env_ids, 0] = cos_y
+    pull_dir[env_ids, 1] = sin_y

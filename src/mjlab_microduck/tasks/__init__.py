@@ -94,6 +94,11 @@ from .microduck_tug_chain_env_cfg import (
     MicroduckTugChainShuffleRlCfg,
     MicroduckTugChainSteadyRlCfg,
 )
+from .microduck_tug_chain3_env_cfg import (
+    make_microduck_tug_chain3_env_cfg,
+    MicroduckTugChain3ShuffleRlCfg,
+    MicroduckTugChain3SteadyRlCfg,
+)
 from .backlash import make_backlash_variant
 
 # Standard velocity task
@@ -336,6 +341,26 @@ register_mjlab_task(
     env_cfg=make_microduck_tug_chain_env_cfg(style="shuffle"),
     play_env_cfg=make_microduck_tug_chain_env_cfg(style="shuffle", play=True),
     rl_cfg=MicroduckTugChainShuffleRlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
+
+# 3v3 tug-CHAIN self-play — full match link geometry; the learner is the red
+# MIDDLE duck (loaded from both sides), the other five run frozen v7 chain
+# policies. Fallen frozen ducks stay in as dead weight; only the learner's
+# fall ends the episode.
+register_mjlab_task(
+    task_id="Mjlab-Microduck-TugChain3-Steady",
+    env_cfg=make_microduck_tug_chain3_env_cfg(style="steady"),
+    play_env_cfg=make_microduck_tug_chain3_env_cfg(style="steady", play=True),
+    rl_cfg=MicroduckTugChain3SteadyRlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
+
+register_mjlab_task(
+    task_id="Mjlab-Microduck-TugChain3-Shuffle",
+    env_cfg=make_microduck_tug_chain3_env_cfg(style="shuffle"),
+    play_env_cfg=make_microduck_tug_chain3_env_cfg(style="shuffle", play=True),
+    rl_cfg=MicroduckTugChain3ShuffleRlCfg,
     runner_cls=MicroduckOnPolicyRunner,
 )
 

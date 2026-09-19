@@ -327,6 +327,11 @@ def get_swing360_spec() -> mujoco.MjSpec:
 # Butt tow eye of the harness collar (hardware/tug-rig/cad_collar.py), trunk
 # frame — identical to RING_LOCAL_* in robot/tug_of_war.py.
 TUG_RING_LOCAL = (-0.0686, 0.0, 0.016)
+# Chest tow eye of the same collar (front D-ring centre) — CHEST_LOCAL in
+# robot/tug_of_war.py. Chain ducks are pulled at the butt ring (enemy side)
+# and pull their own trailing teammate with the chest ring: the force path
+# goes THROUGH the body, like the match harness.
+TUG_CHEST_LOCAL = (0.0460, 0.0, 0.016)
 # Low, elongated sled: long along the pull direction (x), short enough (4 cm)
 # that it never interferes with leg swing behind the duck.
 TUG_CART_HALF_X = 0.10
@@ -353,10 +358,19 @@ def get_tug_walk_spec() -> mujoco.MjSpec:
     """
     spec = mujoco.MjSpec.from_file(str(MICRODUCK_WALK_XML))
     trunk = next(body for body in spec.bodies if body.name == "trunk_base")
-    # Physics anchor, not decoration — invisible like the demo's rope hooks.
+    # Physics anchors, not decoration — invisible like the demo's rope hooks.
+    # rope_hook: butt tow eye (enemy side in a chain). rope_hook_chest: chest
+    # tow eye (own-team side) — only chained tasks wrap it, but it is part of
+    # the physical collar, so every harness duck carries it.
     trunk.add_site(
         name="rope_hook",
         pos=TUG_RING_LOCAL,
+        size=(0.004,),
+        rgba=(0.0, 0.0, 0.0, 0.0),
+    )
+    trunk.add_site(
+        name="rope_hook_chest",
+        pos=TUG_CHEST_LOCAL,
         size=(0.004,),
         rgba=(0.0, 0.0, 0.0, 0.0),
     )
@@ -635,6 +649,24 @@ MICRODUCK_TUG_CHAIN_OPPONENT_CFG = EntityCfg(
         soft_joint_pos_limit_factor=0.9,
     ),
 )
+
+
+def make_tug_duck_entity_cfg() -> EntityCfg:
+    """Fresh harness-duck EntityCfg for multi-duck chain scenes (3v3).
+
+    Every duck in a chain scene needs its own EntityCfg instance (entity cfgs
+    carry per-entity resolved state) — this factory returns a new copy of the
+    MICRODUCK_TUG_ROBOT_CFG configuration per call.
+    """
+    return EntityCfg(
+        spec_fn=get_tug_walk_spec,
+        init_state=HOME_FRAME,
+        collisions=(FULL_COLLISION,),
+        articulation=EntityArticulationInfoCfg(
+            actuators=(actuators,),
+            soft_joint_pos_limit_factor=0.9,
+        ),
+    )
 
 # Position is set each episode by the reset_tug_cart event; the init pos here
 # only matters for the pristine pre-first-reset state.
