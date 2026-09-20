@@ -104,7 +104,7 @@ ROPE_PLY_CENTER_R = 0.0038
 ROPE_PLY_TUBE_R = 0.0043
 ROPE_PLY_TWISTS_PER_TURN = 4
 
-CHORD_BINS = np.round(np.arange(0.10, 0.38, 0.01), 2)
+CHORD_BINS = np.round(np.arange(0.10, 0.58, 0.01), 2)  # 覆盖长绳 1v1（gap 0.55 → 环距 0.41）；旧上限 0.38 导致绳够不到绳结
 SAG_BINS = (0.0, 0.33, 0.67, 1.0)   # fraction of SAG_MAX
 SPAN_T_SEGMENTS = 26
 SPAN_ALPHA_SEGMENTS = 6
@@ -144,6 +144,24 @@ def _add_rope_sites(spec: mujoco.MjSpec, team: str) -> None:
         size=(0.004,),
         rgba=(0.0, 0.0, 0.0, 0.0),
     )
+    # Yaw-coupling sites: a link is TWO parallel cords offset ±25mm laterally,
+    # so relative rotation between linked ducks unbalances the pair and
+    # creates a restoring torque (a single centered cord lets tug policies
+    # spin in circles — red drifted -265° in 15s).
+    for base, local_fn in (("rope_hook", ring_local), ("rope_hook_chest", chest_local)):
+        p = local_fn(team)
+        trunk.add_site(
+            name=f"{base}_yl",
+            pos=(p[0], p[1] + 0.025, p[2]),
+            size=(0.004,),
+            rgba=(0.0, 0.0, 0.0, 0.0),
+        )
+        trunk.add_site(
+            name=f"{base}_yr",
+            pos=(p[0], p[1] - 0.025, p[2]),
+            size=(0.004,),
+            rgba=(0.0, 0.0, 0.0, 0.0),
+        )
 
 
 def _link_side_pairs(pa: str, pb: str, red: list[str]) -> tuple[tuple[str, str], ...]:
