@@ -69,7 +69,10 @@ _SPAWN_PRETENSION = (0.005, 0.010)
 PROGRESS_MAX_PAID_RATE = 0.4   # m/s of opponent drag that pays; faster pays no extra
 
 # Style recipe parameters (identical to the sled tug task's two recipes)
-STEADY_LEAN_PITCH = math.radians(-18.0)  # butt toward the opponent, classic tug stance
+# v11: butt-to-rope means the puller leans FORWARD (head into the pull
+# direction, sled-dog stance) — leaning back toward the rope was the
+# face-the-rope pose, which reads wrong in our back-to-back setup.
+STEADY_LEAN_PITCH = math.radians(15.0)
 SHUFFLE_LEAN_PITCH = 0.0
 LEAN_STD = 0.07
 STEADY_CADENCE_HZ = 1.5
