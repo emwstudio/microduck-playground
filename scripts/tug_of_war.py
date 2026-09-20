@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 from pathlib import Path
 
@@ -123,6 +124,16 @@ def main() -> None:
                              "(outer ducks toppled at 1-4s and lay there for the "
                              "whole round); 2.0 absorbs the yanks — zero early "
                              "falls, rounds stay 10-15s, outcomes stay balanced")
+    parser.add_argument("--rope-stiffness", type=float, default=0.0,
+                        help="override cord stiffness N/m (0 = keep spec 200). "
+                             "Longer ropes stretch more before the force peaks, "
+                             "so a fatigued duck never slips at 200; 400 restores "
+                             "the grip-break that decides the bout")
+    parser.add_argument("--yaw-damping", type=float, default=0.5,
+                        help="rotational dof damping on each duck's freejoint; "
+                             "self-directed tug policies have no heading reference "
+                             "and walk in circles (red drifted -265deg in 15s). "
+                             "0.5 keeps drift ~20deg/15s without hurting the pull")
     parser.add_argument("--foot-friction", type=float, default=2.0,
                         help="foot sliding friction mu; sim default ~1.0 lets the rope "
                              "drag ducks instead of gripping (real PU sole ~2.0)")
@@ -153,6 +164,10 @@ def main() -> None:
     parser.add_argument("--fatigue-floor", type=float, default=0.9)
     parser.add_argument("--fatigue-team", choices=["random", "red", "blue", "alternate"],
                         default="random")
+    parser.add_argument("--yaw-kp", type=float, default=0.8,
+                        help="PD gain on per-duck heading error -> twist ang_vel_z "
+                             "command for tug-kind ducks (v15: policies are trained "
+                             "to track small rate commands; 0 = no steering wheel)")
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--metrics", type=Path, default=None)
@@ -186,6 +201,18 @@ def main() -> None:
     if args.rope_damping > 0:
         model.tendon_damping[:] = args.rope_damping
         print(f"rope damping {args.rope_damping} N·s/m on {model.ntendon} cords")
+    if args.rope_stiffness > 0:
+        model.tendon_stiffness[:] = args.rope_stiffness
+        print(f"rope stiffness {args.rope_stiffness} N/m on {model.ntendon} cords")
+    if args.yaw_damping > 0:
+        for rig in rigs:
+            a = rig.free_qpos_adr
+            # freejoint dofs: 0-2 translation, 3-5 rotation (qvel layout)
+            dof_adr = int(model.jnt_dofadr[
+                mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT,
+                                  f"{rig.prefix}trunk_base_freejoint")])
+            model.dof_damping[dof_adr + 3:dof_adr + 6] = args.yaw_damping
+        print(f"yaw damping {args.yaw_damping} on {len(rigs)} freejoints")
     # Per-team foot geom ids (longest-prefix match; red duck 0's prefix is "").
     team_foot_geoms = {"red": [], "blue": []}
     for i in range(model.ngeom):
@@ -273,6 +300,14 @@ def main() -> None:
                 surge_team = args.surge_team
         else:
             surge_team = None
+        # v15 heading-hold: record each duck's spawn yaw; per step, tug-kind
+        # ducks get a gentle PD yaw-rate command in their twist ang_vel_z slot
+        # (they are trained to track it) instead of a hard zero.
+        yaw_spawn = {}
+        for rig in rigs:
+            q = data.xquat[rig.trunk_body_id]
+            yaw_spawn[rig.prefix] = math.atan2(
+                2.0 * (q[0] * q[3] + q[1] * q[2]), 1.0 - 2.0 * (q[2] ** 2 + q[3] ** 2))
         while step < steps:
             # Tug-style policies are self-directed: their twist slot was
             # zero-padded in training, so feeding a real pull speed is OOD
@@ -281,6 +316,15 @@ def main() -> None:
                 0.0 if kinds[rig.team] == "tug" else pull_speeds[k]
                 for k, rig in enumerate(rigs)
             ])
+            yaw_rates = np.zeros(len(rigs), dtype=np.float32)
+            for k, rig in enumerate(rigs):
+                if kinds[rig.team] != "tug" or args.yaw_kp <= 0:
+                    continue
+                q = data.xquat[rig.trunk_body_id]
+                yaw = math.atan2(2.0 * (q[0] * q[3] + q[1] * q[2]),
+                                 1.0 - 2.0 * (q[2] ** 2 + q[3] ** 2))
+                err = (yaw - yaw_spawn[rig.prefix] + math.pi) % (2.0 * math.pi) - math.pi
+                yaw_rates[k] = float(np.clip(-args.yaw_kp * err, -0.3, 0.3))
             # Surge: after a pure-deadlock stalemate the surge team digs deep
             # (ramps to 1+amount over 3s) and grinds the rope across — rounds
             # end decisively at 12-19s with zero falls.
@@ -296,7 +340,7 @@ def main() -> None:
                     elif args.comeback_press > 0 and rig.team != surge_team:
                         # Phase 1: the non-surge team visibly gains ground.
                         cmd_speeds[j] *= 1.0 + args.comeback_press
-            obs = compute_obs(model, data, rigs, cmd_speeds)
+            obs = compute_obs(model, data, rigs, cmd_speeds, yaw_rates)
             if not np.isfinite(obs).all():
                 winner, reason = "draw", "NaN in observations"
                 break

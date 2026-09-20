@@ -203,9 +203,12 @@ def make_microduck_tug_chain_env_cfg(
 
     # ── Rewards: drop command-gated locomotion terms (same set as the sled
     # tug task — the pull is self-directed, twist stays tiny/zero-padded) ─────
+    # v15: track_angular_velocity STAYS (weight cut 2.0→0.75) — it is the yaw
+    # control channel alpha uses to hold heading; tug policies spun ±150°/21s
+    # in the match without it. Deployment feeds a gentle PD correction into
+    # the ang_vel_z slot, so the policy must learn to track small rate cmds.
     for name in [
         "track_linear_velocity",
-        "track_angular_velocity",
         "air_time",
         "foot_clearance",
         "foot_swing_height",
@@ -213,6 +216,7 @@ def make_microduck_tug_chain_env_cfg(
         "pose",     # do-nothing jackpot vs the task stack (see tug task)
     ]:
         cfg.rewards.pop(name, None)
+    cfg.rewards["track_angular_velocity"].weight = 0.75
 
     # Anti-slip stays always-on (no command gate in this command-less task).
     cfg.rewards["foot_slip"].weight = -0.1
@@ -265,14 +269,9 @@ def make_microduck_tug_chain_env_cfg(
             "taut_length": ROPE_TAUT_LENGTH,
         },
     )
-    # v13: hold the spawn heading — self-directed pullers curve (v7 spun
-    # -265°/15s in the match); the yaw coupling/damping fixes all blocked
-    # the bout-deciding pivot, so straightness must be TRAINED.
-    cfg.rewards["tug_chain_heading_hold"] = RewardTermCfg(
-        func=microduck_mdp.tug_chain_heading_hold,
-        weight=0.5,
-        params={"std": 0.35},
-    )
+    # v13 heading-hold REMOVED in v15: rewarding absolute heading without a
+    # control channel degenerated training (91% falls). Rate tracking +
+    # deployment-side PD is the working mechanism (alpha-proven).
     # Action smoothness: same stage-0 values and ramps as the sled tug task.
     cfg.rewards["action_rate_l2"].weight = -0.1 if steady else -0.05
 
@@ -281,7 +280,7 @@ def make_microduck_tug_chain_env_cfg(
     command.rel_turn_in_place_envs = 0.0
     command.ranges.lin_vel_x = (-0.01, 0.01)
     command.ranges.lin_vel_y = (-0.01, 0.01)
-    command.ranges.ang_vel_z = (-0.05, 0.05)
+    command.ranges.ang_vel_z = (-0.3, 0.3)  # v15: 让策略学会跟踪部署侧的 PD 回正指令
     command.debug_vis = False
     cfg.commands["twist"] = microduck_mdp.VelocityCommandCommandOnlyCfg(**vars(command))
     # head_pose / body_pose commands + obs terms stay as the velocity factory

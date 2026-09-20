@@ -859,10 +859,16 @@ def _quat_rotate_inverse(quat: np.ndarray, vec: np.ndarray) -> np.ndarray:
 
 
 def compute_obs(model: mujoco.MjModel, data: mujoco.MjData, rigs: list[DuckRig],
-                pull_speeds: np.ndarray) -> np.ndarray:
+                pull_speeds: np.ndarray,
+                yaw_rates: np.ndarray | None = None) -> np.ndarray:
     """(n_ducks, 61) obs batch matching the walking/running ONNX contract:
     ang_vel(3) | projected_gravity(3) | joint_pos_rel(14) | joint_vel(14) |
-    last_action(14) | twist(3) | head_pose(4 zeros) | body_pose(6 zeros)."""
+    last_action(14) | twist(3) | head_pose(4 zeros) | body_pose(6 zeros).
+
+    ``yaw_rates`` (optional, per duck) fills the twist ang_vel_z slot — the
+    v15 heading-hold channel: deployment feeds a gentle PD correction and the
+    rate-tracking-trained policy steers back onto its spawn heading.
+    """
     obs = np.zeros((len(rigs), 61), dtype=np.float32)
     world_gravity = np.array([0.0, 0.0, -1.0], dtype=np.float32)
     for k, rig in enumerate(rigs):
@@ -871,9 +877,10 @@ def compute_obs(model: mujoco.MjModel, data: mujoco.MjData, rigs: list[DuckRig],
         proj_g = _quat_rotate_inverse(quat, world_gravity)
         joint_pos = data.qpos[rig.joint_qpos_idx] - DEFAULT_POSE
         joint_vel = data.qvel[rig.joint_qvel_idx]
+        wz = 0.0 if yaw_rates is None else float(yaw_rates[k])
         row = np.concatenate([
             gyro, proj_g, joint_pos, joint_vel, rig.last_action,
-            [pull_speeds[k], 0.0, 0.0], np.zeros(10, dtype=np.float32),
+            [pull_speeds[k], 0.0, wz], np.zeros(10, dtype=np.float32),
         ])
         obs[k] = row
     return obs

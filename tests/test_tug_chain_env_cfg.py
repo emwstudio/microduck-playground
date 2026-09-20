@@ -230,7 +230,6 @@ def test_command_gated_locomotion_terms_removed():
     cfg = make_microduck_tug_chain_env_cfg()
     for name in (
         "track_linear_velocity",
-        "track_angular_velocity",
         "air_time",
         "foot_clearance",
         "foot_swing_height",
@@ -238,6 +237,11 @@ def test_command_gated_locomotion_terms_removed():
     ):
         assert name not in cfg.rewards, name
     assert cfg.rewards["foot_slip"].params["command_threshold"] == 0.0
+    # v15: track_angular_velocity STAYS as the yaw-control channel (weight
+    # cut below the pull stack), and the ang_vel_z slot carries real commands.
+    assert cfg.rewards["track_angular_velocity"].weight == pytest.approx(0.75)
+    lo, hi = cfg.commands["twist"].ranges.ang_vel_z
+    assert (lo, hi) == (-0.3, 0.3)
 
 
 def test_terminations_cover_falls_nan_overlean_and_bounds():
