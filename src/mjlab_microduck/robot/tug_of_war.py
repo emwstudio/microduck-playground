@@ -681,22 +681,13 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         span_vec = e1 - e0
         span_len = float(np.linalg.norm(span_vec))
         if span.is_center:
-            # Park the red ribbon at the rope midpoint, axis along the rope.
+            # Hang the ribbon flag straight down from the rope midpoint:
+            # flag top at rope level (half-height 0.02 + 2mm), axis-aligned
+            # (identity quat = vertical drape).
             marker_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "rope_marker")
-            data.mocap_pos[model.body_mocapid[marker_id]] = (e0 + e1) / 2.0 - chord_vec * 0.005
-            x = span_vec / max(span_len, 1e-6)
-            z_ref = np.array([0.0, 0.0, 1.0])
-            axis = np.cross(z_ref, x)
-            n = np.linalg.norm(axis)
-            if n > 1e-6:
-                ang = math.acos(np.clip(np.dot(z_ref, x), -1.0, 1.0))
-                axis /= n
-                data.mocap_quat[model.body_mocapid[marker_id]] = [
-                    math.cos(ang / 2.0),
-                    axis[0] * math.sin(ang / 2.0),
-                    axis[1] * math.sin(ang / 2.0),
-                    axis[2] * math.sin(ang / 2.0),
-                ]
+            mocap_adr = model.body_mocapid[marker_id]
+            data.mocap_pos[mocap_adr] = (e0 + e1) / 2.0 + np.array([0.0, 0.0, -0.022])
+            data.mocap_quat[mocap_adr] = [1.0, 0.0, 0.0, 0.0]
         slack = max(0.0, span.nominal - chord)
         sag = min(SAG_MAX, SAG_PER_SLACK * slack + 0.002)
         # Ground clamp: the sag belly must never dip below the floor — the
@@ -840,13 +831,13 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
             contype=0,
             conaffinity=0,
         )
-    # Red ribbon at the rope's midpoint — the real tug-of-war center marker.
-    # Moved to the center span's midpoint every frame in update_rope_visuals.
+    # Red ribbon hanging DOWN from the rope midpoint — the real tug-of-war
+    # center flag. Positioned below the center span's midpoint every frame.
     marker = parent.worldbody.add_body(name="rope_marker", mocap=True)
     marker.add_geom(
         name="rope_marker",
-        type=mujoco.mjtGeom.mjGEOM_CYLINDER,
-        size=(0.007, 0.012),
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        size=(0.002, 0.015, 0.02),   # 薄片旗: 3cm宽 4cm高
         rgba=(0.9, 0.1, 0.1, 1.0),
         contype=0,
         conaffinity=0,
