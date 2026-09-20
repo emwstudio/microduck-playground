@@ -9190,6 +9190,7 @@ def reset_tug_chain_opponent(
     env_ids: torch.Tensor,
     trunk_gap_range: tuple = (0.250, 0.255),
     opponent_asset: str = "opponent",
+    front: bool = False,
 ):
     """Place the opponent duck back-to-back behind the learner, rope pre-tensioned.
 
@@ -9203,6 +9204,10 @@ def reset_tug_chain_opponent(
     slack phase at episode start. Also freezes the per-env pull direction
     (robot spawn yaw) for the chain rewards. Non-accumulating by construction
     (absolute pose write).
+
+    ``front=True`` (v14 face-to-face): the opponent spawns IN FRONT of the
+    learner instead, and the frozen pull direction flips sign (the learner
+    pulls BACKWARD — it drags the opponent toward itself, not away).
     """
     if env_ids is None or len(env_ids) == 0:
         return
@@ -9222,11 +9227,12 @@ def reset_tug_chain_opponent(
     )
     # Opponent trunk sits `gap` behind the learner along -pull_dir and faces
     # back toward it (yaw + π); trunk z copies the robot's spawn height so the
-    # rope is horizontal at spawn.
+    # rope is horizontal at spawn. front=True flips it to +pull_dir (in front).
     yaw_opp = yaw + math.pi
+    sign = 1.0 if front else -1.0
     pose = torch.zeros(n, 7, device=env.device)
-    pose[:, 0] = root[:, 0] - cos_y * gap
-    pose[:, 1] = root[:, 1] - sin_y * gap
+    pose[:, 0] = root[:, 0] + sign * cos_y * gap
+    pose[:, 1] = root[:, 1] + sign * sin_y * gap
     pose[:, 2] = root[:, 2]
     pose[:, 3] = torch.cos(yaw_opp / 2.0)
     pose[:, 6] = torch.sin(yaw_opp / 2.0)
@@ -9234,8 +9240,9 @@ def reset_tug_chain_opponent(
     opp.write_root_link_velocity_to_sim(torch.zeros(n, 6, device=env.device), env_ids)
 
     pull_dir = _tug_pull_dir(env)
-    pull_dir[env_ids, 0] = cos_y
-    pull_dir[env_ids, 1] = sin_y
+    # Face-to-face: the learner drags the opponent TOWARD itself (-forward).
+    pull_dir[env_ids, 0] = -sign * cos_y
+    pull_dir[env_ids, 1] = -sign * sin_y
 
 
 # =============================================================================

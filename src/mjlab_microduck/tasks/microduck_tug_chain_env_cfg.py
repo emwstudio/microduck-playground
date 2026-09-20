@@ -52,6 +52,13 @@ ROPE_RGBA = (0.92, 0.87, 0.70, 1.0)
 RING_GAP_NOMINAL = 0.103
 ROPE_TAUT_LENGTH = RING_GAP_NOMINAL + ROPE_SLACK  # 0.108
 
+# ── Face-to-face variant (v14) ───────────────────────────────────────────────
+# Learner FACES the opponent: rope runs learner chest-ring ↔ opponent butt-ring,
+# the puller walks BACKWARD and leans AWAY from the rope — the actual human
+# tug-of-war pose (the back-to-back setup was the user's explicit complaint).
+F2F_TRUNK_GAP_NOMINAL = RING_GAP_NOMINAL + 0.0460 + 0.0686  # chest x + butt |x|
+F2F_STEADY_LEAN_PITCH = math.radians(-15.0)  # lean AWAY from the rope (human pose)
+
 # Frozen opponent policies (cross-adversary), resolved against the repo root.
 _POLICY_DIR = Path(__file__).resolve().parents[3] / "policies"
 OPPONENT_POLICY_BY_STYLE = {
@@ -145,14 +152,35 @@ def _add_chain_rope(spec: _mujoco.MjSpec) -> None:
     rope.wrap_site("opponent/rope_hook")
 
 
+def _add_chain_rope_f2f(spec: _mujoco.MjSpec) -> None:
+    """Face-to-face variant: rope runs learner CHEST ring ↔ opponent butt ring."""
+    rope = spec.add_tendon(
+        name="tug_rope",
+        stiffness=ROPE_STIFFNESS,
+        springlength=(0.0, ROPE_TAUT_LENGTH),
+        limited=True,
+        range=(0.0, ROPE_TAUT_LENGTH + ROPE_LIMIT_MARGIN),
+        width=ROPE_WIDTH,
+        rgba=ROPE_RGBA,
+        solref_limit=(0.02, 1.0),
+        solimp_limit=(0.90, 0.95, 0.001, 0.5, 2.0),
+    )
+    rope.damping = np.array([[ROPE_DAMPING], [0.0], [0.0]])
+    rope.wrap_site("robot/rope_hook_chest")
+    rope.wrap_site("opponent/rope_hook")
+
+
 def make_microduck_tug_chain_env_cfg(
     style: str = "steady",
     play: bool = False,
+    face_to_face: bool = False,
 ) -> ManagerBasedRlEnvCfg:
     """Create the Microduck 1v1 tug-chain environment configuration.
 
     ``style`` selects the LEARNER's gait-style recipe ("steady" lean-pull /
     "shuffle" quick-pull); the frozen opponent is the other style's v6 policy.
+    ``face_to_face=True`` (v14): learner faces the opponent and pulls BACKWARD
+    with the rope on its chest ring, leaning away from the rope (human pose).
     """
     assert style in ("steady", "shuffle")
     steady = style == "steady"
@@ -164,7 +192,7 @@ def make_microduck_tug_chain_env_cfg(
         "robot": MICRODUCK_TUG_ROBOT_CFG,
         "opponent": MICRODUCK_TUG_CHAIN_OPPONENT_CFG,
     }
-    cfg.scene.spec_fn = _add_chain_rope
+    cfg.scene.spec_fn = _add_chain_rope_f2f if face_to_face else _add_chain_rope
 
     # ── Actions: learner keeps the 14D joint_pos term; the opponent is driven
     # by a zero-dim action term running the frozen ONNX policy every env step.
@@ -207,7 +235,7 @@ def make_microduck_tug_chain_env_cfg(
         weight=0.3,
         params={
             "taut_length": ROPE_TAUT_LENGTH,
-            "robot_site": "rope_hook",
+            "robot_site": "rope_hook_chest" if face_to_face else "rope_hook",
             "cart_site": "rope_hook",
             "cart_asset": "opponent",
         },
@@ -221,7 +249,8 @@ def make_microduck_tug_chain_env_cfg(
         func=microduck_mdp.tug_chain_trunk_lean_tracking,
         weight=1.5,
         params={
-            "target_pitch": STEADY_LEAN_PITCH if steady else SHUFFLE_LEAN_PITCH,
+            "target_pitch": (F2F_STEADY_LEAN_PITCH if face_to_face
+                             else STEADY_LEAN_PITCH) if steady else SHUFFLE_LEAN_PITCH,
             "std": LEAN_STD,
             "taut_length": ROPE_TAUT_LENGTH,
         },
@@ -319,15 +348,25 @@ def make_microduck_tug_chain_env_cfg(
 
     # Opponent placement — MUST come after reset_base (insertion order): the
     # opponent pose derives from the final robot pose. Also freezes the
-    # per-env pull direction (robot heading at reset).
-    gap_range = OPPONENT_TRUNK_GAP_RANGE if ENABLE_OPPONENT_GAP_DR else (
-        sum(OPPONENT_TRUNK_GAP_RANGE) / 2.0,
-        sum(OPPONENT_TRUNK_GAP_RANGE) / 2.0,
-    )
+    # per-env pull direction (robot heading at reset). Face-to-face mode uses
+    # its own (shorter) trunk gap — chest-to-butt ring distance is the same.
+    if face_to_face:
+        _f2f_gap = (
+            F2F_TRUNK_GAP_NOMINAL + ROPE_SLACK + _SPAWN_PRETENSION[0],
+            F2F_TRUNK_GAP_NOMINAL + ROPE_SLACK + _SPAWN_PRETENSION[1],
+        )
+        gap_range = _f2f_gap if ENABLE_OPPONENT_GAP_DR else (
+            sum(_f2f_gap) / 2.0, sum(_f2f_gap) / 2.0,
+        )
+    else:
+        gap_range = OPPONENT_TRUNK_GAP_RANGE if ENABLE_OPPONENT_GAP_DR else (
+            sum(OPPONENT_TRUNK_GAP_RANGE) / 2.0,
+            sum(OPPONENT_TRUNK_GAP_RANGE) / 2.0,
+        )
     cfg.events["reset_tug_chain_opponent"] = EventTermCfg(
         func=microduck_mdp.reset_tug_chain_opponent,
         mode="reset",
-        params={"trunk_gap_range": gap_range},
+        params={"trunk_gap_range": gap_range, "front": face_to_face},
     )
 
     if not ENABLE_VELOCITY_PUSHES:
@@ -410,3 +449,5 @@ def _make_tug_chain_rl_cfg(experiment_name: str) -> RslRlOnPolicyRunnerCfg:
 
 MicroduckTugChainSteadyRlCfg = _make_tug_chain_rl_cfg("tugchain_steady")
 MicroduckTugChainShuffleRlCfg = _make_tug_chain_rl_cfg("tugchain_shuffle")
+MicroduckTugChainFSteadyRlCfg = _make_tug_chain_rl_cfg("tugchainf_steady")
+MicroduckTugChainFShuffleRlCfg = _make_tug_chain_rl_cfg("tugchainf_shuffle")

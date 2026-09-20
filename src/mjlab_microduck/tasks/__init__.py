@@ -91,6 +91,8 @@ from .microduck_tug_env_cfg import (
 )
 from .microduck_tug_chain_env_cfg import (
     make_microduck_tug_chain_env_cfg,
+    MicroduckTugChainFShuffleRlCfg,
+    MicroduckTugChainFSteadyRlCfg,
     MicroduckTugChainShuffleRlCfg,
     MicroduckTugChainSteadyRlCfg,
 )
@@ -346,6 +348,24 @@ register_mjlab_task(
     env_cfg=make_microduck_tug_chain_env_cfg(style="shuffle"),
     play_env_cfg=make_microduck_tug_chain_env_cfg(style="shuffle", play=True),
     rl_cfg=MicroduckTugChainShuffleRlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
+
+# v14 FACE-TO-FACE 1v1 — learner faces the opponent, rope chest-ring to
+# butt-ring, pulls BACKWARD leaning away from the rope (human tug pose).
+register_mjlab_task(
+    task_id="Mjlab-Microduck-TugChainF-Steady",
+    env_cfg=make_microduck_tug_chain_env_cfg(style="steady", face_to_face=True),
+    play_env_cfg=make_microduck_tug_chain_env_cfg(style="steady", play=True, face_to_face=True),
+    rl_cfg=MicroduckTugChainFSteadyRlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
+
+register_mjlab_task(
+    task_id="Mjlab-Microduck-TugChainF-Shuffle",
+    env_cfg=make_microduck_tug_chain_env_cfg(style="shuffle", face_to_face=True),
+    play_env_cfg=make_microduck_tug_chain_env_cfg(style="shuffle", play=True, face_to_face=True),
+    rl_cfg=MicroduckTugChainFShuffleRlCfg,
     runner_cls=MicroduckOnPolicyRunner,
 )
 
