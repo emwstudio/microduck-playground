@@ -131,6 +131,14 @@ def main() -> None:
                              "its spot (real pullers get up; keeps all 10 ducks "
                              "visibly pulling). Rounds are then decided by the rope "
                              "crossing a win line, never by team wipe. 0 = off.")
+    parser.add_argument("--surge-start", type=float, default=0.0,
+                        help="seconds of pure deadlock before the surge team digs deep "
+                             "(ramp to 1+surge-amount over 3s). 0 = off")
+    parser.add_argument("--surge-amount", type=float, default=1.5,
+                        help="surge multiplier on the surge team's pull speed")
+    parser.add_argument("--surge-team", choices=["random", "red", "blue", "alternate"],
+                        default="random",
+                        help="which team surges; 'alternate' = red on even rounds, blue on odd")
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--metrics", type=Path, default=None)
@@ -218,6 +226,15 @@ def main() -> None:
         t_start = time.time()
         down_time: dict[str, float] = {}
         kinds = {"red": args.red_kind, "blue": args.blue_kind}
+        if args.surge_start > 0:
+            if args.surge_team == "alternate":
+                surge_team = "red" if round_idx % 2 == 0 else "blue"
+            elif args.surge_team == "random":
+                surge_team = rng.choice(["red", "blue"])
+            else:
+                surge_team = args.surge_team
+        else:
+            surge_team = None
         while step < steps:
             # Tug-style policies are self-directed: their twist slot was
             # zero-padded in training, so feeding a real pull speed is OOD
@@ -226,6 +243,16 @@ def main() -> None:
                 0.0 if kinds[rig.team] == "tug" else pull_speeds[k]
                 for k, rig in enumerate(rigs)
             ])
+            # Surge: after a pure-deadlock stalemate the surge team digs deep
+            # (ramps to 1+amount over 3s) and grinds the rope across — rounds
+            # end decisively at 12-19s with zero falls.
+            if surge_team is not None:
+                t_now = step * control_dt
+                if t_now > args.surge_start:
+                    k = min(1.0, (t_now - args.surge_start) / 3.0)
+                    for j, rig in enumerate(rigs):
+                        if rig.team == surge_team and kinds[rig.team] == "walk":
+                            cmd_speeds[j] *= 1.0 + args.surge_amount * k
             obs = compute_obs(model, data, rigs, cmd_speeds)
             if not np.isfinite(obs).all():
                 winner, reason = "draw", "NaN in observations"
