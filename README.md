@@ -34,6 +34,22 @@ full-video link—to open the complete silent MP4.
   </thead>
   <tbody>
     <tr>
+      <td><strong>Tug-of-war</strong></td>
+      <td>
+        <a href="experiments/tug-of-war/media/preview.mp4">
+          <img src="experiments/tug-of-war/media/preview.gif" width="280" alt="Two Microducks pulling a rope back-to-back, red ribbon at the rope midpoint">
+        </a>
+      </td>
+      <td>
+        Two harness-collared ducks pull a real tension-only rope back-to-back;
+        a red ribbon at the midpoint decides who wins when it crosses your
+        line. Shipped bout: v16 fine-tuned steady-lean mirror, red wins at
+        12.3 s, zero falls, near-zero rotation.<br>
+        <a href="experiments/tug-of-war/media/preview.mp4">Full video</a> ·
+        <a href="experiments/tug-of-war/README.md">Experiment and training</a>
+      </td>
+    </tr>
+    <tr>
       <td><strong>Self-pumped swing</strong></td>
       <td>
         <a href="experiments/swing/media/alpha050_seed27.mp4">
