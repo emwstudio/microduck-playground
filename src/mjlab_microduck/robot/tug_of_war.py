@@ -408,6 +408,11 @@ def resolve_rope_visuals(model: mujoco.MjModel, n_per_team: int,
         site_a, site_b = _span_hook_sites(pa, pb, red)
         team_a = "red" if pa in red else "blue"
         team_b = "red" if pb in red else "blue"
+        # Nominal must be the PHYSICS cord's ring-to-ring taut length (the
+        # mother-bug fix), not trunk distance — otherwise the selector thinks
+        # the rope has ~13 cm of slack and picks the saggiest variant.
+        _RING_OFF = {"rope_hook": abs(RING_LOCAL_X), "rope_hook_chest": CHEST_LOCAL[0]}
+        trunk_nominal = gap if pa == red[0] else spacing
         spans.append(SpanVisual(
             body_id=body_id,
             geom_id=geom_id,
@@ -415,7 +420,7 @@ def resolve_rope_visuals(model: mujoco.MjModel, n_per_team: int,
             trunk_b_id=mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{pb}trunk_base"),
             local_a=(ring_local(team_a) if site_a == "rope_hook" else chest_local(team_a)).copy(),
             local_b=(ring_local(team_b) if site_b == "rope_hook" else chest_local(team_b)).copy(),
-            nominal=(gap if pa == red[0] else spacing),
+            nominal=trunk_nominal - _RING_OFF[site_a] - _RING_OFF[site_b] + ROPE_SLACK,
             variant_mesh_ids=variant_ids,
             variant_ends=ends,
         ))
@@ -656,6 +661,10 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         span_len = float(np.linalg.norm(span_vec))
         slack = max(0.0, span.nominal - chord)
         sag = min(SAG_MAX, SAG_PER_SLACK * slack + 0.002)
+        # Ground clamp: the sag belly must never dip below the floor — the
+        # visual rope has no collision, and ducks crouch their rings to ~5 cm.
+        floor_room = max(0.0, min(p0[2], p1[2]) - 0.012)
+        sag = min(sag, floor_room)
         # Pick the variant whose actual end-to-end length is closest.
         tail_dists = np.linalg.norm(
             span.variant_ends[:, 0, 2] - span.variant_ends[:, 0, 0], axis=1)
