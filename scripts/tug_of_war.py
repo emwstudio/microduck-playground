@@ -168,6 +168,15 @@ def main() -> None:
                         help="PD gain on per-duck heading error -> twist ang_vel_z "
                              "command for tug-kind ducks (v15: policies are trained "
                              "to track small rate commands; 0 = no steering wheel)")
+    parser.add_argument("--lane-walls", type=float, default=0.0, metavar="HALF_WIDTH",
+                        help="invisible frictionless planes at y=±this; the duck's "
+                             "curved gait can only pull along x (rotation NOT "
+                             "blocked — bout-deciding pivot still works). 0 = off")
+    parser.add_argument("--cam-track", type=float, default=0.0,
+                        help="0..1: camera azimuth counter-rotates against the pair's "
+                             "rope-axis drift — the co-orbiting pair (v7's curved "
+                             "gait) appears stationary, background sweeps instead. "
+                             "1.0 = full cancel, 0.6-0.8 leaves some life")
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--metrics", type=Path, default=None)
@@ -190,7 +199,8 @@ def main() -> None:
     spec_win_x_red = args.win_x_red if args.win_x_red is not None else args.win_x
     spec = build_tug_spec(n_per_team=args.n_per_team, spacing=args.spacing,
                           gap=args.gap, win_x=spec_win_x_red,
-                          win_x_blue=args.win_x_blue)
+                          win_x_blue=args.win_x_blue,
+                          lane_walls=args.lane_walls)
     model = spec.compile()
     data = mujoco.MjData(model)
     rigs = find_duck_rigs(model, args.n_per_team)
@@ -308,6 +318,14 @@ def main() -> None:
             q = data.xquat[rig.trunk_body_id]
             yaw_spawn[rig.prefix] = math.atan2(
                 2.0 * (q[0] * q[3] + q[1] * q[2]), 1.0 - 2.0 * (q[2] ** 2 + q[3] ** 2))
+        # Orbit-cancel camera: the rope axis at reset (for --cam-track).
+        rope_yaw0 = None
+        if args.cam_track > 0 and renderer is not None:
+            red_rigs = [r for r in rigs if r.team == "red"]
+            blue_rigs = [r for r in rigs if r.team == "blue"]
+            pa = data.xpos[red_rigs[0].trunk_body_id][:2]
+            pb = data.xpos[blue_rigs[0].trunk_body_id][:2]
+            rope_yaw0 = math.atan2((pb - pa)[1], (pb - pa)[0])
         while step < steps:
             # Tug-style policies are self-directed: their twist slot was
             # zero-padded in training, so feeding a real pull speed is OOD
@@ -363,6 +381,14 @@ def main() -> None:
                 model.geom_friction[team_foot_geoms[fatigue_team], 0] = mu
             if renderer is not None and step % render_skip == 0:
                 update_rope_visuals(model, data, rope_spans, renderer._mjr_context)
+                if rope_yaw0 is not None:
+                    # Counter-rotate the camera against the pair's rope-axis
+                    # drift so the co-orbiting pair reads stationary on video.
+                    pa = data.xpos[red_rigs[0].trunk_body_id][:2]
+                    pb = data.xpos[blue_rigs[0].trunk_body_id][:2]
+                    rope_yaw = math.atan2((pb - pa)[1], (pb - pa)[0])
+                    drift = (rope_yaw - rope_yaw0 + math.pi) % (2.0 * math.pi) - math.pi
+                    camera.azimuth = args.azimuth + math.degrees(drift) * args.cam_track
                 renderer.update_scene(data, camera)
                 frame = renderer.render()
                 writer.append_data(frame if args.no_grade else grade_frame(frame))

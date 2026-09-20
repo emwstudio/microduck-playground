@@ -736,11 +736,33 @@ def _add_line_geom(spec: mujoco.MjSpec, name: str, x: float,
 def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
                    gap: float = CENTER_GAP, win_x: float = WIN_X,
                    win_x_blue: float | None = None,
+                   lane_walls: float = 0.0,
                    red_rgba=RED_RGBA, blue_rgba=BLUE_RGBA) -> mujoco.MjSpec:
-    """Composite spec: floor + n red ducks (x<0, facing -x) + n blue ducks."""
+    """Composite spec: floor + n red ducks (x<0, facing -x) + n blue ducks.
+
+    ``lane_walls`` > 0 adds two invisible FRICTIONLESS planes at y=±lane_walls
+    so ducks can only pull along x — the v7 policy's curved gait orbits the
+    pair ±150° otherwise. Rotation itself is NOT blocked (the bout-deciding
+    pivot still works); only lateral translation is eaten.
+    """
     red, blue = team_prefixes(n_per_team)
 
     parent = mujoco.MjSpec.from_file(str(_SCENE_XML))
+    if lane_walls > 0:
+        for y, sgn in ((lane_walls, -1.0), (-lane_walls, 1.0)):
+            wall = parent.worldbody.add_geom(
+                name=f"lane_wall_{sgn:+.0f}",
+                type=mujoco.mjtGeom.mjGEOM_PLANE,
+                pos=(0.0, y, 0.0),
+                quat=(1.0, 0.0, 0.0, 0.0),
+                size=(5.0, 5.0, 0.1),
+                rgba=(0.0, 0.0, 0.0, 0.0),   # invisible
+                friction=(0.0, 0.0, 0.0),
+                contype=1,
+                conaffinity=0,
+            )
+            # rotate plane normal to face the arena: plane default normal +z
+            wall.quat = (0.7071068, sgn * 0.7071068, 0.0, 0.0)
     _tint_shells(parent, red_rgba)          # unprefixed robot = red duck 0
     _add_rope_sites(parent, "red")
 
