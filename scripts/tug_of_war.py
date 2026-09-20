@@ -139,6 +139,11 @@ def main() -> None:
     parser.add_argument("--surge-team", choices=["random", "red", "blue", "alternate"],
                         default="random",
                         help="which team surges; 'alternate' = red on even rounds, blue on odd")
+    parser.add_argument("--comeback-press", type=float, default=0.0,
+                        help="phase-1 multiplier bonus for the NON-surge team: it "
+                             "visibly pushes the surge team back until surge-start, "
+                             "then the surge team digs deep and reverses. No static "
+                             "deadlock on video — the rope moves the whole bout.")
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--metrics", type=Path, default=None)
@@ -248,11 +253,16 @@ def main() -> None:
             # end decisively at 12-19s with zero falls.
             if surge_team is not None:
                 t_now = step * control_dt
-                if t_now > args.surge_start:
-                    k = min(1.0, (t_now - args.surge_start) / 3.0)
-                    for j, rig in enumerate(rigs):
-                        if rig.team == surge_team and kinds[rig.team] == "walk":
+                for j, rig in enumerate(rigs):
+                    if kinds[rig.team] != "walk":
+                        continue
+                    if t_now > args.surge_start:
+                        if rig.team == surge_team:
+                            k = min(1.0, (t_now - args.surge_start) / 3.0)
                             cmd_speeds[j] *= 1.0 + args.surge_amount * k
+                    elif args.comeback_press > 0 and rig.team != surge_team:
+                        # Phase 1: the non-surge team visibly gains ground.
+                        cmd_speeds[j] *= 1.0 + args.comeback_press
             obs = compute_obs(model, data, rigs, cmd_speeds)
             if not np.isfinite(obs).all():
                 winner, reason = "draw", "NaN in observations"
