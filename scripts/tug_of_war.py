@@ -144,6 +144,15 @@ def main() -> None:
                              "visibly pushes the surge team back until surge-start, "
                              "then the surge team digs deep and reverses. No static "
                              "deadlock on video — the rope moves the whole bout.")
+    parser.add_argument("--fatigue-start", type=float, default=0.0,
+                        help="seconds before one team's foot mu ramps down "
+                             "(2.0 -> fatigue-floor over 3s): the fatigued side "
+                             "slides on its feet and loses ground — works on "
+                             "self-directed tug policies (surge only throttles "
+                             "walk-kind commands). 0 = off")
+    parser.add_argument("--fatigue-floor", type=float, default=0.9)
+    parser.add_argument("--fatigue-team", choices=["random", "red", "blue", "alternate"],
+                        default="random")
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--metrics", type=Path, default=None)
@@ -177,6 +186,16 @@ def main() -> None:
     if args.rope_damping > 0:
         model.tendon_damping[:] = args.rope_damping
         print(f"rope damping {args.rope_damping} N·s/m on {model.ntendon} cords")
+    # Per-team foot geom ids (longest-prefix match; red duck 0's prefix is "").
+    team_foot_geoms = {"red": [], "blue": []}
+    for i in range(model.ngeom):
+        nm = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, i) or ""
+        if "foot" not in nm:
+            continue
+        owner = max((r for r in rigs if nm.startswith(r.prefix)),
+                    key=lambda r: len(r.prefix), default=None)
+        if owner is not None:
+            team_foot_geoms[owner.team].append(i)
     if args.foot_friction > 0:
         foot_geoms = [i for i in range(model.ngeom)
                       if "foot" in (mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, i) or "")]
@@ -215,6 +234,11 @@ def main() -> None:
     score = {"red": 0, "blue": 0, "draw": 0}
     for round_idx in range(args.rounds):
         reset_round(model, data, rigs, spawns, rng)
+        # model.geom_friction persists across mj_resetData — restore the base
+        # foot mu so last round's fatigue doesn't leak into this one.
+        for team in ("red", "blue"):
+            if team_foot_geoms[team] and args.foot_friction > 0:
+                model.geom_friction[team_foot_geoms[team], 0] = args.foot_friction
         pull_speeds = args.pull_speed * rng.uniform(
             1.0 - args.pull_jitter, 1.0 + args.pull_jitter, size=len(rigs))
         boost_team = rng.choice(["red", "blue"])
@@ -231,6 +255,15 @@ def main() -> None:
         t_start = time.time()
         down_time: dict[str, float] = {}
         kinds = {"red": args.red_kind, "blue": args.blue_kind}
+        if args.fatigue_start > 0:
+            if args.fatigue_team == "alternate":
+                fatigue_team = "red" if round_idx % 2 == 0 else "blue"
+            elif args.fatigue_team == "random":
+                fatigue_team = rng.choice(["red", "blue"])
+            else:
+                fatigue_team = args.fatigue_team
+        else:
+            fatigue_team = None
         if args.surge_start > 0:
             if args.surge_team == "alternate":
                 surge_team = "red" if round_idx % 2 == 0 else "blue"
@@ -278,6 +311,12 @@ def main() -> None:
             for _ in range(decimation):
                 mujoco.mj_step(model, data)
             step += 1
+            # Fatigue: the fatigue team's foot grip ramps down, it slides on
+            # its feet (never falls) and bleeds ground until the line breaks.
+            if fatigue_team is not None and step * control_dt > args.fatigue_start:
+                k = min(1.0, (step * control_dt - args.fatigue_start) / 3.0)
+                mu = args.foot_friction + (args.fatigue_floor - args.foot_friction) * k
+                model.geom_friction[team_foot_geoms[fatigue_team], 0] = mu
             if renderer is not None and step % render_skip == 0:
                 update_rope_visuals(model, data, rope_spans, renderer._mjr_context)
                 renderer.update_scene(data, camera)
