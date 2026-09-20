@@ -9,6 +9,7 @@ center line, forward walking IS pulling. Used by scripts/tug_of_war.py.
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -381,6 +382,7 @@ class SpanVisual:
     # pos/quat — see _variant_ends). Mocap placement is solved against these
     # so the rendered rope tips land exactly on the wrap points.
     variant_ends: np.ndarray
+    is_center: bool = False
 
 
 def _variant_ends(model: mujoco.MjModel, mesh_id: int,
@@ -441,6 +443,7 @@ def resolve_rope_visuals(model: mujoco.MjModel, n_per_team: int,
             nominal=trunk_nominal - _RING_OFF[site_a] - _RING_OFF[site_b] + ROPE_SLACK,
             variant_mesh_ids=variant_ids,
             variant_ends=ends,
+            is_center=(pa == red[0]),
         ))
     return spans
 
@@ -677,6 +680,23 @@ def update_rope_visuals(model: mujoco.MjModel, data: mujoco.MjData,
         e1 = p1 - chord_vec * back
         span_vec = e1 - e0
         span_len = float(np.linalg.norm(span_vec))
+        if span.is_center:
+            # Park the red ribbon at the rope midpoint, axis along the rope.
+            marker_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "rope_marker")
+            data.mocap_pos[model.body_mocapid[marker_id]] = (e0 + e1) / 2.0 - chord_vec * 0.005
+            x = span_vec / max(span_len, 1e-6)
+            z_ref = np.array([0.0, 0.0, 1.0])
+            axis = np.cross(z_ref, x)
+            n = np.linalg.norm(axis)
+            if n > 1e-6:
+                ang = math.acos(np.clip(np.dot(z_ref, x), -1.0, 1.0))
+                axis /= n
+                data.mocap_quat[model.body_mocapid[marker_id]] = [
+                    math.cos(ang / 2.0),
+                    axis[0] * math.sin(ang / 2.0),
+                    axis[1] * math.sin(ang / 2.0),
+                    axis[2] * math.sin(ang / 2.0),
+                ]
         slack = max(0.0, span.nominal - chord)
         sag = min(SAG_MAX, SAG_PER_SLACK * slack + 0.002)
         # Ground clamp: the sag belly must never dip below the floor — the
@@ -820,6 +840,17 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
             contype=0,
             conaffinity=0,
         )
+    # Red ribbon at the rope's midpoint — the real tug-of-war center marker.
+    # Moved to the center span's midpoint every frame in update_rope_visuals.
+    marker = parent.worldbody.add_body(name="rope_marker", mocap=True)
+    marker.add_geom(
+        name="rope_marker",
+        type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+        size=(0.007, 0.012),
+        rgba=(0.9, 0.1, 0.1, 1.0),
+        contype=0,
+        conaffinity=0,
+    )
 
     _add_line_geom(parent, "center_line", 0.0, (1.0, 1.0, 1.0, 1.0))
     _add_line_geom(parent, "win_line_red", -win_x, red_rgba)

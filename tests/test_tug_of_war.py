@@ -122,7 +122,7 @@ def test_spawns_face_outward_and_straddle_center() -> None:
 def test_hemp_visuals_span_the_chain(tug_model) -> None:
     # 9 spans on mocap bodies + 44 precomputed swept-rope variants shared
     # via geom_dataid swap; physics tendons hidden.
-    assert tug_model.nmocap == 9
+    assert tug_model.nmocap == 10  # 9 spans + rope_marker 红布条
     assert tug_model.ntendon == 9
     n_variants = sum(
         1 for i in range(tug_model.nmesh)
