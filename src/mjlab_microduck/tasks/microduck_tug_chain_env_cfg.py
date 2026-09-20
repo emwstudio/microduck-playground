@@ -236,6 +236,14 @@ def make_microduck_tug_chain_env_cfg(
             "taut_length": ROPE_TAUT_LENGTH,
         },
     )
+    # v13: hold the spawn heading — self-directed pullers curve (v7 spun
+    # -265°/15s in the match); the yaw coupling/damping fixes all blocked
+    # the bout-deciding pivot, so straightness must be TRAINED.
+    cfg.rewards["tug_chain_heading_hold"] = RewardTermCfg(
+        func=microduck_mdp.tug_chain_heading_hold,
+        weight=0.5,
+        params={"std": 0.35},
+    )
     # Action smoothness: same stage-0 values and ramps as the sled tug task.
     cfg.rewards["action_rate_l2"].weight = -0.1 if steady else -0.05
 

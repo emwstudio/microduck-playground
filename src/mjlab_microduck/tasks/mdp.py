@@ -9101,6 +9101,30 @@ def tug_chain_progress(
     return delta.clamp(-max_step, max_step)
 
 
+def tug_chain_heading_hold(
+    env: ManagerBasedRlEnv,
+    std: float = 0.35,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Gaussian on yaw deviation from the spawn heading. ∈ [0, 1].
+
+    Self-directed tug policies have no heading reference (the twist slot is
+    zero-padded) and CURVE while pulling — the v7 match ducks spun -265° in
+    15s. This term pays staying on the spawn heading; the spawn yaw is
+    re-anchored after every reset (the chain reset event randomizes it).
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+    quat = torch.nan_to_num(asset.data.root_link_quat_w, nan=0.0)
+    qw, qx, qy, qz = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
+    yaw = torch.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+    if not hasattr(env, "_tug_chain_heading0"):
+        env._tug_chain_heading0 = yaw.clone()
+    fresh = env.episode_length_buf <= 1
+    env._tug_chain_heading0[fresh] = yaw[fresh]
+    err = (yaw - env._tug_chain_heading0 + math.pi) % (2.0 * math.pi) - math.pi
+    return torch.exp(-(err / std).square())
+
+
 def tug_chain_trunk_lean_tracking(
     env: ManagerBasedRlEnv,
     target_pitch: float,
