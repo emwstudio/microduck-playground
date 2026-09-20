@@ -214,7 +214,7 @@ def test_shared_terms_identical_between_styles():
     # Style differences: lean target, cadence target, action-rate ramp.
     assert steady.rewards["tug_chain_trunk_lean"].params[
         "target_pitch"
-    ] == pytest.approx(math.radians(15.0))  # v11: 前倾（背绳负重犬式）
+    ] == pytest.approx(math.radians(8.0))  # v12
     assert shuffle.rewards["tug_chain_trunk_lean"].params["target_pitch"] == 0.0
     assert (
         shuffle.rewards["tug_chain_step_cadence"].params["target_hz"]
