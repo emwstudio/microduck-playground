@@ -708,6 +708,7 @@ def _add_line_geom(spec: mujoco.MjSpec, name: str, x: float,
 
 def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
                    gap: float = CENTER_GAP, win_x: float = WIN_X,
+                   win_x_blue: float | None = None,
                    red_rgba=RED_RGBA, blue_rgba=BLUE_RGBA) -> mujoco.MjSpec:
     """Composite spec: floor + n red ducks (x<0, facing -x) + n blue ducks."""
     red, blue = team_prefixes(n_per_team)
@@ -773,7 +774,7 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
 
     _add_line_geom(parent, "center_line", 0.0, (1.0, 1.0, 1.0, 1.0))
     _add_line_geom(parent, "win_line_red", -win_x, red_rgba)
-    _add_line_geom(parent, "win_line_blue", win_x, blue_rgba)
+    _add_line_geom(parent, "win_line_blue", win_x_blue if win_x_blue is not None else win_x, blue_rgba)
     # Offscreen framebuffer big enough for 1280x720+ renders.
     parent.visual.global_.offwidth = 1920
     parent.visual.global_.offheight = 1080

@@ -103,6 +103,11 @@ def main() -> None:
                         help="each round one random team gets its pull speed x(1+this); "
                              "symmetric teams otherwise deadlock into draws")
     parser.add_argument("--win-x", type=float, default=0.18)
+    parser.add_argument("--win-x-red", type=float, default=None,
+                        help="override red-side win distance (handicap balancing: "
+                             "a stronger red team can be given a longer grind)")
+    parser.add_argument("--win-x-blue", type=float, default=None,
+                        help="override blue-side win distance")
     parser.add_argument("--spacing", type=float, default=DUCK_SPACING)
     parser.add_argument("--gap", type=float, default=CENTER_GAP)
     parser.add_argument("--pretension", type=float, default=0.015,
@@ -144,8 +149,11 @@ def main() -> None:
         parser.error("--out is required unless --no-render")
 
     rng = np.random.default_rng(args.seed)
+    # The red floor line sits at the EFFECTIVE red win distance (handicap).
+    spec_win_x_red = args.win_x_red if args.win_x_red is not None else args.win_x
     spec = build_tug_spec(n_per_team=args.n_per_team, spacing=args.spacing,
-                          gap=args.gap, win_x=args.win_x)
+                          gap=args.gap, win_x=spec_win_x_red,
+                          win_x_blue=args.win_x_blue)
     model = spec.compile()
     data = mujoco.MjData(model)
     rigs = find_duck_rigs(model, args.n_per_team)
@@ -261,11 +269,13 @@ def main() -> None:
                         down_time[rig.prefix] = 0.0
                 states = team_states(model, data, rigs)
                 midpoint_x = (states["red"]["center_x"] + states["blue"]["center_x"]) / 2.0
+                win_x_red = args.win_x_red if args.win_x_red is not None else args.win_x
+                win_x_blue = args.win_x_blue if args.win_x_blue is not None else args.win_x
                 if step * control_dt > 1.0:
-                    if midpoint_x < -args.win_x:
+                    if midpoint_x < -win_x_red:
                         winner, reason = "red", f"rope pulled past red line (midpoint {midpoint_x:+.2f} m)"
                         break
-                    if midpoint_x > args.win_x:
+                    if midpoint_x > win_x_blue:
                         winner, reason = "blue", f"rope pulled past blue line (midpoint {midpoint_x:+.2f} m)"
                         break
             elif step * control_dt > 1.0:  # grace period: spawn transients
