@@ -855,9 +855,9 @@ def build_tug_spec(n_per_team: int = 5, spacing: float = DUCK_SPACING,
     _add_line_geom(parent, "center_line", 0.0, (1.0, 1.0, 1.0, 1.0))
     _add_line_geom(parent, "win_line_red", -win_x, red_rgba)
     _add_line_geom(parent, "win_line_blue", win_x_blue if win_x_blue is not None else win_x, blue_rgba)
-    # Offscreen framebuffer big enough for 1280x720+ renders.
-    parent.visual.global_.offwidth = 1920
-    parent.visual.global_.offheight = 1080
+    # Offscreen framebuffer big enough for 4K renders.
+    parent.visual.global_.offwidth = 4096
+    parent.visual.global_.offheight = 2304
     return parent
 
 
