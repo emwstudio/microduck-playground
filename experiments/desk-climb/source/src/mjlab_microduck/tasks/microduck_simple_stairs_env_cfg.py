@@ -23,11 +23,19 @@ SIMPLE_STAIRS_GEOMETRY = StairLadderGeometry(
     tread_depth_m=0.060,  # the whole 54 mm sole rests flat (validate cap: 60 mm)
     landing_every=12,  # the 12th tread is the full-depth top platform
 )
-# Full-width treads space same-side treads one riser apart, so the toe needs
-# riser >= 29 mm (StairLadderGeometry.min_riser_m).  30 mm on 105 mm legs is
-# stair-like but climbable; the ~26.6 deg angle follows from the 60 mm run.
+# Full-width treads space same-side treads one riser apart, so with
+# overlapping treads the toe needs riser >= 29 mm
+# (StairLadderGeometry.min_riser_m).  The curriculum therefore starts with
+# small risers at *open-riser* angles (run >= tread depth: the swing foot
+# passes through the gaps, never under a tread) and converges on 30 mm at
+# 26.6 deg where the 60 mm treads tile contiguously.  Mirrors LADDER_LEVELS'
+# riser bands with angles recomputed to the tiling boundary.
 SIMPLE_STAIRS_LEVELS: tuple[dict, ...] = (
-    {"riser": (0.030, 0.030), "angle": (26.6, 26.6)},
+    {"riser": (0.015, 0.017), "angle": (13.0, 14.0)},
+    {"riser": (0.017, 0.020), "angle": (14.0, 15.8)},
+    {"riser": (0.020, 0.023), "angle": (15.8, 18.4)},
+    {"riser": (0.023, 0.027), "angle": (18.4, 21.0)},
+    {"riser": (0.027, 0.030), "angle": (21.0, 24.2)},
 )
 SIMPLE_STAIRS_EPISODE_LENGTH_S = 12.0
 
