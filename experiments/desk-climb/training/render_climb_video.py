@@ -70,6 +70,9 @@ p.add_argument("--out", required=True)
 p.add_argument("--seconds", type=float, default=45.0)
 p.add_argument("--seed", type=int, default=19923)
 p.add_argument("--azimuth", type=float, default=100.0)
+p.add_argument("--distance", type=float, default=1.0)
+p.add_argument("--elevation", type=float, default=-12.0)
+p.add_argument("--style", choices=["default", "hf"], default="default")
 a = p.parse_args()
 torch.set_num_threads(1)
 configure_torch_backends()
@@ -87,13 +90,14 @@ cfg.auto_reset = False
 cfg.terminations.pop("reached_top", None)
 cfg.episode_length_s = a.seconds + 1
 configure_video_cfg(cfg)
-cfg.viewer.distance = 0.85
-cfg.viewer.elevation = -10.0
+cfg.viewer.distance = a.distance
+cfg.viewer.elevation = a.elevation
 cfg.viewer.azimuth = a.azimuth
 
 raw = ManagerBasedRlEnv(cfg, device="cuda:0", render_mode="rgb_array")
 fix_render_shadows(raw, light_dir=(-0.5, 0.2, -1.0))
-style_hf(raw)
+if a.style == "hf":
+    style_hf(raw)
 steps = int(round(a.seconds / raw.step_dt))
 env = VideoRecorder(raw, video_folder=out, step_trigger=lambda s: s == 0, video_length=steps, disable_logger=True)
 agent = asdict(DeskRecoveryRlCfg)
