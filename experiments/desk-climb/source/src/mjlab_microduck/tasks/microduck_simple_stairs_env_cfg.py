@@ -40,11 +40,54 @@ SIMPLE_STAIRS_LEVELS: tuple[dict, ...] = (
 SIMPLE_STAIRS_EPISODE_LENGTH_S = 12.0
 
 
+def _foot_targets_per_side(
+    env, asset_cfg, min_rise: float = 0.006, scale: float = 0.05
+):
+    """ladder_foot_targets with per-side lateral targets on full-width treads.
+
+    Upstream `_stair_foot_target_info` aims BOTH feet at the tread centre for
+    full-width treads (tread_side == 0); only landings get per-side targets
+    (landing_target_per_side, fixing the converging-step hesitation of the
+    2026-09-04 landing study).  On a plain full-width staircase EVERY tread
+    is full width, so all mini-tread targets were centreline.  Aim each foot
+    at its own side of every full-width tread instead.
+    """
+    import torch
+    from mjlab_microduck.tasks import mdp as _mdp
+    from mjlab.managers import SceneEntityCfg as _SEC
+
+    state = _mdp._stair_state(env)
+    asset = env.scene[asset_cfg.name]
+    out = torch.zeros(env.num_envs, 4, device=env.device)
+    if state is None:
+        return out
+    info = _mdp._stair_foot_target_info(env, asset, min_rise)
+    g = state.geometry
+    num = g.num_treads
+    yaw = _mdp._yaw_from_quat(asset.data.root_link_quat_w)
+    cy, sy = torch.cos(yaw), torch.sin(yaw)
+    lat_mag = 0.5 * g.center_gap_m + 0.5 * g.side_width_m
+    landing = torch.tensor([g.is_landing(i) for i in range(num)], device=env.device)
+    for slot, side in enumerate((1.0, -1.0)):
+        idx = info["index"][:, slot].clamp_max(num - 1)
+        full_width = state.tread_side[idx] == 0.0
+        needs_offset = full_width & ~landing[idx] & info["valid"][:, slot]
+        tyaw = state.tread_yaw.gather(1, idx[:, None]).squeeze(1)
+        off = side * lat_mag * torch.stack((-torch.sin(tyaw), torch.cos(tyaw)), dim=-1)
+        vec = info["vec"][:, slot].clone()
+        vec[:, :2] = vec[:, :2] + torch.where(needs_offset[:, None], off, torch.zeros_like(off))
+        fwd = vec[:, 0] * cy + vec[:, 1] * sy
+        valid = info["valid"][:, slot]
+        out[:, 2 * slot] = torch.where(valid, fwd / scale, 0.0)
+        out[:, 2 * slot + 1] = torch.where(valid, vec[:, 2] / scale, 0.0)
+    return torch.nan_to_num(out, nan=0.0).clamp(-5.0, 5.0)
+
+
 def make_microduck_simple_stairs_env_cfg(
-    play: bool = False, top_spawn_prob: float = 0.0
+    play: bool = False, top_spawn_prob: float = 0.0, per_side_targets: bool = False
 ) -> ManagerBasedRlEnvCfg:
     """Straight full-width staircase with a top platform (see module docstring)."""
-    return make_microduck_ladder_env_cfg(
+    cfg = make_microduck_ladder_env_cfg(
         play=play,
         geometry=SIMPLE_STAIRS_GEOMETRY,
         level_table=SIMPLE_STAIRS_LEVELS,
@@ -52,6 +95,15 @@ def make_microduck_simple_stairs_env_cfg(
         max_start_tread=8,
         top_spawn_prob=top_spawn_prob,
     )
+    if per_side_targets:
+        from mjlab.managers import SceneEntityCfg
+
+        for group in ("actor", "critic"):
+            terms = cfg.observations[group].terms
+            terms["head_command"] = deepcopy(terms["head_command"])
+            terms["head_command"].func = _foot_targets_per_side
+            terms["head_command"].params = {"asset_cfg": SceneEntityCfg("robot")}
+    return cfg
 
 
 MicroduckSimpleStairsRlCfg = deepcopy(MicroduckLadderRlCfg)
