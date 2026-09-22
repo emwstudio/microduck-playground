@@ -68,6 +68,10 @@ from .microduck_ladder_env_cfg import (
     make_microduck_staircase_landing_env_cfg,
     MicroduckStaircaseDemoRlCfg,
 )
+from .microduck_simple_stairs_env_cfg import (
+    make_microduck_simple_stairs_env_cfg,
+    MicroduckSimpleStairsRlCfg,
+)
 from .microduck_ball_kick_env_cfg import (
     make_microduck_ball_kick_env_cfg,
     MicroduckBallKickRlCfg,
@@ -219,6 +223,16 @@ register_mjlab_task(
     env_cfg=make_microduck_ladder_env_cfg(),
     play_env_cfg=make_microduck_ladder_env_cfg(play=True),
     rl_cfg=MicroduckLadderRlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
+
+# Simple straight staircase: full-width 60 mm treads, 30 mm risers, top
+# platform (see make_microduck_simple_stairs_env_cfg).
+register_mjlab_task(
+    task_id="Mjlab-SimpleStairs-MicroDuck",
+    env_cfg=make_microduck_simple_stairs_env_cfg(),
+    play_env_cfg=make_microduck_simple_stairs_env_cfg(play=True),
+    rl_cfg=MicroduckSimpleStairsRlCfg,
     runner_cls=MicroduckOnPolicyRunner,
 )
 
