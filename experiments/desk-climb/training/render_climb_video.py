@@ -25,6 +25,45 @@ from mjlab_microduck.tasks.microduck_desk_recovery_env_cfg import (
 )
 from mjlab_microduck.video_effects import configure_video_cfg, fix_render_shadows
 
+def style_hf(raw):
+    """HF 展示视频观感：梯子木色、桌腿白、机器人橙脚橙喙、暖光。纯视觉，不动物理。"""
+    import mujoco
+
+    model = raw.sim.mj_model
+    WOOD = (0.60, 0.40, 0.20, 1.0)
+    WOOD_DARK = (0.45, 0.28, 0.13, 1.0)
+    WOOD_LIGHT = (0.86, 0.70, 0.47, 1.0)
+    LEG_WHITE = (0.92, 0.92, 0.92, 1.0)
+    ORANGE = (0.96, 0.45, 0.08, 1.0)
+    for i in range(model.ngeom):
+        name = (mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, i) or "").split("/")[-1]
+        if name.startswith("desktop"):
+            model.geom_rgba[i] = WOOD_LIGHT
+        elif name.startswith("desk_"):
+            model.geom_rgba[i] = LEG_WHITE
+        elif name.startswith("clamp"):
+            model.geom_rgba[i] = WOOD_DARK
+        elif name.startswith(("tread", "root_", "bridge", "spine", "rail", "base_", "landing")):
+            model.geom_rgba[i] = WOOD
+    ORANGE_PARTS = {
+        "foot_left_material", "foot_right_material",
+        "ankle_left_material", "ankle_right_material",
+        "sole_left_material", "sole_right_material",
+        "jaw_material", "jaw_soft_material", "bottom_head_shell_material",
+    }
+    recolored = set()
+    for i in range(model.nmat):
+        name = (mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_MATERIAL, i) or "").split("/")[-1]
+        if name in ORANGE_PARTS:
+            model.mat_rgba[i] = ORANGE
+            recolored.add(name)
+    print(f"[style] recolored {len(recolored)}/{len(ORANGE_PARTS)} robot materials: {sorted(recolored)}")
+    for i in range(model.nlight):
+        model.light_diffuse[i] = (0.95, 0.90, 0.82)
+        model.light_ambient[i] = (0.35, 0.35, 0.38)
+        model.light_specular[i] = (0.30, 0.30, 0.30)
+
+
 p = argparse.ArgumentParser()
 p.add_argument("--source", required=True)
 p.add_argument("--out", required=True)
@@ -48,12 +87,13 @@ cfg.auto_reset = False
 cfg.terminations.pop("reached_top", None)
 cfg.episode_length_s = a.seconds + 1
 configure_video_cfg(cfg)
-cfg.viewer.distance = 1.0
-cfg.viewer.elevation = -12.0
+cfg.viewer.distance = 0.85
+cfg.viewer.elevation = -10.0
 cfg.viewer.azimuth = a.azimuth
 
 raw = ManagerBasedRlEnv(cfg, device="cuda:0", render_mode="rgb_array")
 fix_render_shadows(raw, light_dir=(-0.5, 0.2, -1.0))
+style_hf(raw)
 steps = int(round(a.seconds / raw.step_dt))
 env = VideoRecorder(raw, video_folder=out, step_trigger=lambda s: s == 0, video_length=steps, disable_logger=True)
 agent = asdict(DeskRecoveryRlCfg)
