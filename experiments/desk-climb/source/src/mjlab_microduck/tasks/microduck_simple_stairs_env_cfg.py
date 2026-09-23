@@ -6,6 +6,7 @@ Deliberately plain: no alternating half-width treads, no curved top
 section, no clamps or bridge plates — a normal straight flight of stairs.
 """
 
+import os
 from copy import deepcopy
 
 from mjlab.envs import ManagerBasedRlEnvCfg
@@ -84,7 +85,9 @@ def _foot_targets_per_side(
 
 
 def make_microduck_simple_stairs_env_cfg(
-    play: bool = False, top_spawn_prob: float = 0.0, per_side_targets: bool = False
+    play: bool = False,
+    top_spawn_prob: float = 0.0,
+    per_side_targets: bool = os.getenv("MICRODUCK_SIMPLE_STAIRS_PER_SIDE", "0") == "1",
 ) -> ManagerBasedRlEnvCfg:
     """Straight full-width staircase with a top platform (see module docstring)."""
     cfg = make_microduck_ladder_env_cfg(
