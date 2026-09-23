@@ -5,17 +5,19 @@ stack, 61-D observation contract) with flat terrain plus one mocap platform.
 
 Task
 ----
-* The robot spawns in the HOME stance facing +x, with a 60 mm deep x 230 mm
-  wide platform ahead.  Spawn mix (v6): ``platform_spawn_prob`` (0.2) already
-  standing on the platform top (reverse curriculum of the goal state),
-  ``edge_spawn_prob`` (0.2) on the floor only 0.04-0.08 m from the platform's
-  front face (reverse curriculum of the takeoff: an exploratory foot lift is
-  immediately inside the foot-progress gate and can meet the success
-  condition), and the rest on the floor 0.18-0.25 m away.  The platform top
-  height IS the twist command: ``vx`` is sampled in 0.025-0.035 m (inside the
-  step-up envelope — v5 narrowed it from 0.03-0.06 to first prove "get on
-  top" works) and the reset event places the mocap platform so its top sits
-  at that height.  Jump onto the platform and stand.
+* The robot spawns facing +x with a 60 mm deep x 230 mm wide platform ahead.
+  Spawn mix (v9): ``airborne_spawn_prob`` (0.6 -> 0 by curriculum) in mid-air
+  above the platform, dropping 8-15 cm onto it — bulk experience of the
+  nearly-done "fall on and stand" state (v4-v8 lesson: the takeoff was never
+  discovered from the floor, so the reverse curriculum moves to the very end
+  state and walks back); ``edge_spawn_prob`` (0.2) on the floor 0.04-0.08 m
+  from the front face; the rest on the floor 0.18-0.25 m away.  The airborne
+  fraction retires as the AIRBORNE-episode landed rate climbs (thresholds
+  0.3/0.5/0.7 -> prob 0.4/0.2/0.0, 200-episode windows), leaving pure floor
+  spawns once the landing is consolidated.  The platform top height IS the
+  twist command: ``vx`` is sampled in 0.025-0.035 m (inside the step-up
+  envelope) and the reset event places the mocap platform so its top sits at
+  that height.  Jump onto the platform and stand.
 * Reward is episodic-style (AGENTS.md): potential-based trunk-height progress
   (paid on the DELTA of min(trunk_z, platform_top + 0.09), per-step capped —
   rising pays, holding pays zero, falling pays back, so it cannot be farmed),
@@ -92,11 +94,25 @@ PLATFORM_HALF_THICKNESS_M = 0.015  # 30 mm slab; the top follows the command
 PLATFORM_HEIGHT_RANGE = (0.025, 0.035)  # m, sampled as the twist vx command
 PLATFORM_DISTANCE_RANGE = (0.18, 0.25)  # m, robot root to the platform front face
 EDGE_DISTANCE_RANGE = (0.04, 0.08)  # m, edge-spawn root to the front face
+AIRBORNE_CLEARANCE_RANGE = (0.08, 0.15)  # m, sole clearance above the platform top
 
 # Spawn types (per-episode, recorded at reset for spawn-typed rewards).
 SPAWN_FLOOR = 0  # far floor spawn (PLATFORM_DISTANCE_RANGE)
 SPAWN_EDGE = 1  # near-edge floor spawn (EDGE_DISTANCE_RANGE)
 SPAWN_PLATFORM = 2  # reverse-curriculum spawn on the platform top
+SPAWN_AIRBORNE = 3  # reverse-curriculum spawn dropping onto the platform top
+
+# v9 airborne reverse curriculum: airborne fraction by AIRBORNE-episode landed
+# success rate (floor success is 0 early, so it cannot drive the schedule).
+# Highest satisfied rate threshold wins; counters reset on every stage change
+# (each stage is measured on a fresh window of AIRBORNE_CURRICULUM_MIN_EPISODES).
+AIRBORNE_CURRICULUM = (
+    {"rate": 0.7, "prob": 0.0},
+    {"rate": 0.5, "prob": 0.2},
+    {"rate": 0.3, "prob": 0.4},
+    {"rate": 0.0, "prob": 0.6},
+)
+AIRBORNE_CURRICULUM_MIN_EPISODES = 200
 
 EPISODE_LENGTH_S = 5.0
 PROGRESS_CAP_ABOVE_TOP_M = 0.09  # pay min(trunk_z, top + this) deltas
@@ -105,7 +121,9 @@ FOOT_PROGRESS_GATE_M = 0.15  # foot z-progress pays only this near the platform 
 SUCCESS_FOOT_MARGIN_M = 0.005  # both feet above top - this
 SUCCESS_UPRIGHT_MIN = 0.9  # -projected_gravity_b z
 SUCCESS_HOLD_S = 0.4
-SUCCESS_PLATFORM_SPAWN_SCALE = 0.075  # platform-top spawns collect 40 * this = 3 (v6 absolute kept when the weight went 20 -> 40 in v8)
+# Nearly-done spawns (platform-top AND airborne) collect 40 * this = 3 — the
+# v6 stand-still lesson applies to every goal-state spawn class.
+SUCCESS_PLATFORM_SPAWN_SCALE = 0.075
 FALLEN_GRAVITY_Z = -0.5  # fallen: projected_gravity_b z above this
 
 
@@ -154,6 +172,12 @@ class _JumpStepState:
         self.hold_steps = torch.zeros(n, dtype=torch.long, device=dev)
         self.hold_step = -1
         self.spawn_type = torch.zeros(n, dtype=torch.long, device=dev)  # SPAWN_*
+        # Airborne-curriculum accounting: per-episode flags plus global counters
+        # (window resets on every curriculum stage change).
+        self.episode_started = torch.zeros(n, dtype=torch.bool, device=dev)
+        self.episode_landed = torch.zeros(n, dtype=torch.bool, device=dev)
+        self.airborne_done = 0
+        self.airborne_landed = 0
 
 
 def _jump_step_state(env: ManagerBasedRlEnv) -> _JumpStepState:
@@ -181,32 +205,34 @@ def reset_jump_step(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     distance_range: tuple[float, float] = PLATFORM_DISTANCE_RANGE,
     edge_distance_range: tuple[float, float] = EDGE_DISTANCE_RANGE,
+    airborne_clearance_range: tuple[float, float] = AIRBORNE_CLEARANCE_RANGE,
     spawn_z: float = 0.122,
     position_noise: float = 0.005,
     yaw_noise_deg: float = 5.0,
     tilt_noise_deg: float = 2.0,
     joint_noise: float = 0.03,
-    platform_spawn_prob: float = 0.2,
+    platform_spawn_prob: float = 0.0,
     edge_spawn_prob: float = 0.2,
+    airborne_spawn_prob: float = 0.6,
 ) -> None:
-    """Spawn the robot in HOME stance facing +x and place the platform ahead of it.
+    """Spawn the robot and place the platform.  Four spawn types (v9 mix):
 
-    Three spawn types (v6 mix):
-
-    * ``platform_spawn_prob``: already standing on the platform top (reverse
-      curriculum of the goal state): root 10 mm behind the platform centre so
-      the whole sole (toe +31 mm / heel -17 mm of the ankle site, on a 60 mm
-      deep top) rests on the platform, z = platform top + the usual standing
-      root height.  The success condition latches within the first steps —
-      but v6 pays those episodes only a fraction of the bonus (v5 lesson:
-      full-pay stand-still success suppressed the approach).
+    * ``airborne_spawn_prob`` (curriculum-driven, 0.6 -> 0): HOME pose in mid-
+      air directly above the platform centre, soles ``airborne_clearance_range``
+      above the top, zero initial velocity — the nearly-done spawn: the robot
+      experiences "fall onto the platform and stick the landing" in bulk
+      before it can jump.  xy jitter is anisotropic: ±5 mm in x (the sole
+      spans -17/+31 mm of the ankle site on a 60 mm deep top — the ±3 cm
+      nominal jitter would drop toes past the front edge), ±30 mm in y (the
+      230 mm width has ample room).
+    * ``platform_spawn_prob`` (0 in v9 — superseded by airborne): standing on
+      the platform top, root 10 mm behind the centre (sole fully on).
     * ``edge_spawn_prob``: on the floor only ``edge_distance_range`` from the
-      platform's front face (reverse curriculum of the takeoff — the feet
-      start inside the foot-progress gate, so any exploratory lift can meet
-      the success condition).
+      platform's front face (takeoff-proximate, feet inside the foot gate).
     * the rest: on the floor ``distance_range`` ahead of the front face.
 
-    Every spawn records its type in ``state.spawn_type`` (SPAWN_*).
+    Every spawn records its type in ``state.spawn_type`` (SPAWN_*) and closes
+    the accounting of the ENDED episode (airborne-curriculum counters).
 
     The platform top follows the twist ``vx`` command.  Commands resample AFTER
     reset events (see module docstring), so the read here can be one episode
@@ -223,14 +249,28 @@ def reset_jump_step(
     asset: Entity = env.scene[asset_cfg.name]
     origins = env.scene.env_origins[env_ids]
 
+    # Close the ended episodes' books for the airborne curriculum (the first
+    # reset after startup has no previous episode).
+    prev_air = state.episode_started[env_ids] & (state.spawn_type[env_ids] == SPAWN_AIRBORNE)
+    if bool(prev_air.any()):
+        state.airborne_done += int(prev_air.sum())
+        state.airborne_landed += int((prev_air & state.episode_landed[env_ids]).sum())
+
     # Spawn-type draw (edge spawns change where the platform goes, so first).
     u = torch.rand(n, device=dev)
-    on_platform = u < platform_spawn_prob
-    on_edge = (u >= platform_spawn_prob) & (u < platform_spawn_prob + edge_spawn_prob)
+    on_airborne = u < airborne_spawn_prob
+    on_platform = (u >= airborne_spawn_prob) & (u < airborne_spawn_prob + platform_spawn_prob)
+    on_edge = (u >= airborne_spawn_prob + platform_spawn_prob) & (
+        u < airborne_spawn_prob + platform_spawn_prob + edge_spawn_prob
+    )
     state.spawn_type[env_ids] = torch.where(
-        on_platform,
-        torch.full_like(u, SPAWN_PLATFORM, dtype=torch.long),
-        torch.where(on_edge, torch.full_like(u, SPAWN_EDGE, dtype=torch.long), torch.full_like(u, SPAWN_FLOOR, dtype=torch.long)),
+        on_airborne,
+        torch.full_like(u, SPAWN_AIRBORNE, dtype=torch.long),
+        torch.where(
+            on_platform,
+            torch.full_like(u, SPAWN_PLATFORM, dtype=torch.long),
+            torch.where(on_edge, torch.full_like(u, SPAWN_EDGE, dtype=torch.long), torch.full_like(u, SPAWN_FLOOR, dtype=torch.long)),
+        ),
     )
 
     # Platform: front face ``distance`` ahead of the robot root, top at the
@@ -247,30 +287,39 @@ def reset_jump_step(
     _mocap_write(env, state, env_ids)
 
     # Robot root: HOME stance, yaw ~0 (facing +x), small noise.  Floor spawns
-    # (far and edge) stand at the env origin; platform spawns stand on the top.
+    # stand at the env origin; platform spawns stand on the top; airborne
+    # spawns drop onto it from ``clearance`` above.
     xy_noise = (torch.rand(n, 2, device=dev) * 2.0 - 1.0) * position_noise
     # Tighter jitter on the platform so both soles stay inside the 60 mm depth.
     plat_noise = (torch.rand(n, 2, device=dev) * 2.0 - 1.0) * 0.002
-    root_pos = torch.stack(
+    air_noise = torch.stack(
         (
-            torch.where(
-                on_platform,
-                state.center_xy[env_ids, 0] - 0.010 + plat_noise[:, 0],
-                origins[:, 0] + xy_noise[:, 0],
-            ),
-            torch.where(
-                on_platform,
-                state.center_xy[env_ids, 1] + plat_noise[:, 1],
-                origins[:, 1] + xy_noise[:, 1],
-            ),
-            torch.where(
-                on_platform,
-                state.top[env_ids] + spawn_z,
-                origins[:, 2] + spawn_z,
-            ),
+            (torch.rand(n, device=dev) * 2.0 - 1.0) * 0.005,
+            (torch.rand(n, device=dev) * 2.0 - 1.0) * 0.03,
         ),
         dim=-1,
     )
+    clearance = airborne_clearance_range[0] + torch.rand(n, device=dev) * (
+        airborne_clearance_range[1] - airborne_clearance_range[0]
+    )
+    root_x = torch.where(
+        on_platform,
+        state.center_xy[env_ids, 0] - 0.010 + plat_noise[:, 0],
+        origins[:, 0] + xy_noise[:, 0],
+    )
+    root_y = torch.where(
+        on_platform,
+        state.center_xy[env_ids, 1] + plat_noise[:, 1],
+        origins[:, 1] + xy_noise[:, 1],
+    )
+    root_z = torch.where(on_platform, state.top[env_ids] + spawn_z, origins[:, 2] + spawn_z)
+    root_x = torch.where(on_airborne, state.center_xy[env_ids, 0] - 0.010 + air_noise[:, 0], root_x)
+    root_y = torch.where(on_airborne, state.center_xy[env_ids, 1] + air_noise[:, 1], root_y)
+    # Root height above the soles at HOME is ~0.120 (spawn_z minus the 2 mm
+    # sole clearance), so root z = top + 0.120 + clearance puts the soles
+    # ``clearance`` above the top.
+    root_z = torch.where(on_airborne, state.top[env_ids] + 0.120 + clearance, root_z)
+    root_pos = torch.stack((root_x, root_y, root_z), dim=-1)
     yaw = (torch.rand(n, device=dev) * 2.0 - 1.0) * math.radians(yaw_noise_deg)
     pitch = (torch.rand(n, device=dev) * 2.0 - 1.0) * math.radians(tilt_noise_deg)
     roll = (torch.rand(n, device=dev) * 2.0 - 1.0) * math.radians(0.5 * tilt_noise_deg)
@@ -302,6 +351,8 @@ def reset_jump_step(
     state.first_foot_latched[env_ids] = False
     state.hold_steps[env_ids] = 0
     state.prev_vz[env_ids] = 0.0
+    state.episode_started[env_ids] = True
+    state.episode_landed[env_ids] = False
 
 
 def sync_jump_step_platform(env: ManagerBasedRlEnv, env_ids: torch.Tensor | None = None) -> None:
@@ -487,16 +538,17 @@ def jump_step_success(
     """One-shot (per episode) bonus for landing on the platform, upright.
     Rate-limited by construction (latched), so it is not a jackpot.
 
-    Spawn-typed (v6): floor-born episodes (far or edge) pay in full;
-    platform-top-born episodes pay ``platform_spawn_scale`` of it (kept at an
-    absolute 3 across weight changes).  v5 paid full price for stand-still-
-    on-spawn success and the policy stopped approaching the platform
-    entirely — the reverse-curriculum experience is kept, but it must not
-    out-earn the real maneuver."""
+    Spawn-typed (v6, extended v9): floor-born episodes (far or edge) pay in
+    full; nearly-done spawns (platform-top AND airborne) pay
+    ``platform_spawn_scale`` of it (kept at an absolute 3 across weight
+    changes).  v5 paid full price for stand-still-on-spawn success and the
+    policy stopped approaching the platform entirely — goal-state spawn
+    experience is kept, but it must not out-earn the real maneuver."""
     state = _jump_step_state(env)
     condition = _success_condition(env, asset_cfg, sensor_name, foot_margin, upright_min)
     pay = (condition & ~state.success_latched).float()
-    scale = torch.where(state.spawn_type == SPAWN_PLATFORM, torch.full_like(pay, platform_spawn_scale), torch.ones_like(pay))
+    goal_spawn = (state.spawn_type == SPAWN_PLATFORM) | (state.spawn_type == SPAWN_AIRBORNE)
+    scale = torch.where(goal_spawn, torch.full_like(pay, platform_spawn_scale), torch.ones_like(pay))
     state.success_latched |= condition
     return pay * scale
 
@@ -534,7 +586,9 @@ def jump_step_landed(
     if state.hold_step != step:
         state.hold_steps = torch.where(condition, state.hold_steps + 1, torch.zeros_like(state.hold_steps))
         state.hold_step = step
-    return state.hold_steps >= round(hold_s / env.step_dt)
+    landed = state.hold_steps >= round(hold_s / env.step_dt)
+    state.episode_landed |= landed  # airborne-curriculum accounting
+    return landed
 
 
 def jump_step_fallen(
@@ -545,6 +599,45 @@ def jump_step_fallen(
     """Fallen: trunk tipped well past vertical (projected_gravity z > -0.5)."""
     asset: Entity = env.scene[asset_cfg.name]
     return asset.data.projected_gravity_b[:, 2] > gravity_z
+
+
+# --- curriculum -------------------------------------------------------------------
+
+
+def jump_step_airborne_curriculum(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor | None = None,
+    event_name: str = "reset_jump_step",
+    min_episodes: int = AIRBORNE_CURRICULUM_MIN_EPISODES,
+) -> float | None:
+    """Retire the airborne reverse-curriculum spawns as the landing is learned.
+
+    Driver: landed-success rate of AIRBORNE episodes only (floor-born success
+    is 0 for most of training and would pin the schedule at the start).
+    Every ``min_episodes`` completed airborne episodes the rate is evaluated
+    against AIRBORNE_CURRICULUM (highest satisfied threshold wins) and the
+    reset event's ``airborne_spawn_prob`` is rewritten through the live event
+    manager (never ``env.cfg`` — managers deepcopy at init).  The measurement
+    window resets on every stage change; the schedule is bidirectional, so a
+    rate collapse re-introduces airborne spawns.  Returns the active
+    ``airborne_spawn_prob``.
+    """
+    state = _jump_step_state(env)
+    term_cfg = env.event_manager.get_term_cfg(event_name)
+    current = float(term_cfg.params.get("airborne_spawn_prob", 0.0))
+    if state.airborne_done < min_episodes:
+        return current
+    rate = state.airborne_landed / state.airborne_done
+    prob = current
+    for stage in AIRBORNE_CURRICULUM:  # descending rate thresholds
+        if rate >= stage["rate"]:
+            prob = stage["prob"]
+            break
+    if prob != current:
+        term_cfg.params["airborne_spawn_prob"] = prob
+        state.airborne_done = 0
+        state.airborne_landed = 0
+    return prob
 
 
 # --- env cfg ----------------------------------------------------------------------
@@ -690,9 +783,11 @@ def make_microduck_jump_step_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg
         params={
             "asset_cfg": robot,
             # Reverse-curriculum spawns in training.  OFF in play/eval so the
-            # eval success rate measures the actual jump, not free successes.
-            "platform_spawn_prob": 0.0 if play else 0.2,
+            # eval success rate measures the actual behavior, not free states
+            # (the eval script opts airborne spawns back in via its own flag).
+            "platform_spawn_prob": 0.0,
             "edge_spawn_prob": 0.0 if play else 0.2,
+            "airborne_spawn_prob": 0.0 if play else 0.6,
         },
     )
     # Run the spawn before every other reset event.
@@ -732,6 +827,13 @@ def make_microduck_jump_step_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg
             ],
         },
     )
+    if not play:
+        # v9: retire the airborne (drop-onto-platform) spawns as the landing
+        # success rate climbs (0.6 -> 0.4 -> 0.2 -> 0).
+        cfg.curriculum["airborne_spawn"] = CurriculumTermCfg(
+            func=jump_step_airborne_curriculum,
+            params={"event_name": "reset_jump_step"},
+        )
     return cfg
 
 

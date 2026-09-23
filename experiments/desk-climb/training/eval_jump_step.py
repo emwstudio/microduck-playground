@@ -1,10 +1,14 @@
 """Evaluate / render the jump_step policy: success rate per platform height.
 
 usage (eval):   uv run python ../training/eval_jump_step.py --source <ckpt> --out <dir> --envs 512 --seconds 6
+usage (mixed):  uv run python ../training/eval_jump_step.py --source <ckpt> --out <dir> --envs 512 --airborne-frac 0.5
 usage (render): uv run python ../training/eval_jump_step.py --source <ckpt> --out <dir> --render --seconds 8 --azimuth 45
 
 Reports per-height-band success fraction (jump_step_landed termination) and
 writes eval.json; with --render records a single-env video instead.
+With --airborne-frac F > 0, F of the spawns drop the robot above the platform
+(v9 airborne mode) and success is reported per spawn class (airborne vs
+floor) with per-episode accounting, instead of the height bands.
 """
 import argparse, json, os
 from dataclasses import asdict
@@ -20,6 +24,7 @@ from mjlab_microduck.tasks import MicroduckOnPolicyRunner, mdp
 from mjlab_microduck.tasks.microduck_jump_step_env_cfg import (
     MicroduckJumpStepRlCfg,
     make_microduck_jump_step_env_cfg,
+    SPAWN_AIRBORNE,
 )
 from mjlab_microduck.video_effects import configure_video_cfg, fix_render_shadows
 
@@ -31,6 +36,8 @@ p.add_argument("--seconds", type=float, default=6.0)
 p.add_argument("--seed", type=int, default=777)
 p.add_argument("--render", action="store_true")
 p.add_argument("--azimuth", type=float, default=45.0)
+p.add_argument("--airborne-frac", type=float, default=0.0,
+               help="fraction of airborne (drop-onto-platform) spawns; >0 reports per-spawn-class success")
 a = p.parse_args()
 out = Path(a.out)
 out.mkdir(parents=True, exist_ok=True)
@@ -41,6 +48,8 @@ cfg.seed = a.seed
 if not a.render:
     # Sweep the training height range in eval (play pins one height by default).
     cfg.commands["twist"].ranges.lin_vel_x = (0.025, 0.035)
+if a.airborne_frac > 0.0 and not a.render:
+    cfg.events["reset_jump_step"].params["airborne_spawn_prob"] = a.airborne_frac
 
 if a.render:
     configure_video_cfg(cfg)
@@ -67,19 +76,49 @@ raw.reset(seed=a.seed)
 obs = env.get_observations()
 assert obs["actor"].shape[-1] == 61
 
-heights = None if a.render else raw.command_manager.get_command("twist")[:, 0].cpu().clone()
+bucketed = a.airborne_frac > 0.0 and not a.render
+heights = None if (a.render or bucketed) else raw.command_manager.get_command("twist")[:, 0].cpu().clone()
 landed_envs = torch.zeros(env.num_envs, dtype=torch.bool, device=raw.device)
+if bucketed:
+    # Per-episode accounting by spawn class: an episode that ends is booked
+    # under its own spawn type (auto-reset has already drawn the next one).
+    cur_type = raw._jump_step_state.spawn_type.clone()
+    ep_total = torch.zeros(2, dtype=torch.long)  # [airborne, floor]
+    ep_landed = torch.zeros(2, dtype=torch.long)
 for step in range(steps):
     with torch.inference_mode():
         act = policy(obs)
     obs, _, done, _ = env.step(act)
+    term = raw.termination_manager.get_term("jump_step_landed").bool()
     if not a.render:
-        term = raw.termination_manager.get_term("jump_step_landed").bool()
         landed_envs |= term
+    if bucketed:
+        fin = done.nonzero(as_tuple=False).squeeze(-1)
+        if len(fin):
+            b = (cur_type[fin] == SPAWN_AIRBORNE).long().cpu()
+            ep_total += torch.bincount(b, minlength=2)
+            ep_landed += torch.bincount(b[term[fin].cpu()], minlength=2)
+            cur_type[fin] = raw._jump_step_state.spawn_type[fin]
     assert torch.isfinite(act).all()
 
 if a.render:
     print(f"[render] done -> {out}")
+elif bucketed:
+    # Unfinished episodes count as attempts (a landed episode terminates).
+    b = (cur_type == SPAWN_AIRBORNE).long().cpu()
+    ep_total += torch.bincount(b, minlength=2)
+    report = {
+        "envs": env.num_envs,
+        "seconds": a.seconds,
+        "seed": a.seed,
+        "airborne_frac": a.airborne_frac,
+        "airborne": {"episodes": int(ep_total[0]), "success": int(ep_landed[0]),
+                     "fraction": round(float(ep_landed[0] / max(ep_total[0], 1)), 4)},
+        "floor": {"episodes": int(ep_total[1]), "success": int(ep_landed[1]),
+                  "fraction": round(float(ep_landed[1] / max(ep_total[1], 1)), 4)},
+    }
+    (out / "eval.json").write_text(json.dumps(report, indent=2))
+    print(json.dumps(report, indent=2))
 else:
     bands = {}
     h = heights.numpy()
