@@ -23,14 +23,15 @@ Task
   the FEET (v7 — the trunk version was collected by leaning over the platform
   head-first; feet don't advance during a lean), a per-foot z-progress that
   pays only within 15 cm of the platform centre (teaches clearing the top
-  with the FEET), a one-shot first-foot-on-top bonus (the rung between
-  "toes at the wall" and "both feet up"), a head/trunk platform-contact
-  cost (the anti-lean price), a one-shot success bonus (both feet above the
-  platform top, feet supported by platform contact, trunk upright — full pay
-  only for episodes that started on the FLOOR; platform-top spawns collect a
-  small fraction so "stand still" cannot out-earn the approach, the v5
-  lesson), an |a_z|-class landing-impact cost, and a light action-rate tax
-  that stays small during skill discovery.
+  with the FEET), a one-shot first-foot-on-top bonus that only pays mid-
+  transition with the trailing foot airborne (v8 — the v7 static one-foot
+  park farmed it), a head/trunk platform-contact cost (the anti-lean price),
+  a one-shot success bonus (both feet above the platform top, feet supported
+  by platform contact, trunk upright — full pay only for episodes that
+  started on the FLOOR; platform-top spawns collect a small fraction so
+  "stand still" cannot out-earn the approach, the v5 lesson), an |a_z|-class
+  landing-impact cost, and a light action-rate tax that stays small during
+  skill discovery.
 * A fall terminates with no positive payoff; landing is a time_out success
   after the success condition holds for 0.4 s.
 
@@ -104,7 +105,7 @@ FOOT_PROGRESS_GATE_M = 0.15  # foot z-progress pays only this near the platform 
 SUCCESS_FOOT_MARGIN_M = 0.005  # both feet above top - this
 SUCCESS_UPRIGHT_MIN = 0.9  # -projected_gravity_b z
 SUCCESS_HOLD_S = 0.4
-SUCCESS_PLATFORM_SPAWN_SCALE = 0.15  # platform-top spawns collect 20 * this = 3
+SUCCESS_PLATFORM_SPAWN_SCALE = 0.075  # platform-top spawns collect 40 * this = 3 (v6 absolute kept when the weight went 20 -> 40 in v8)
 FALLEN_GRAVITY_Z = -0.5  # fallen: projected_gravity_b z above this
 
 
@@ -430,22 +431,31 @@ def jump_step_first_foot_bonus(
     env: ManagerBasedRlEnv,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", site_names=("left_foot", "right_foot")),
     sensor_name: str = PLATFORM_CONTACT_SENSOR,
+    ground_sensor_name: str = "feet_ground_contact",
     foot_margin: float = SUCCESS_FOOT_MARGIN_M,
     upright_min: float = 0.7,
 ) -> torch.Tensor:
-    """One-shot (per episode) bonus for the FIRST foot on the platform top:
-    either foot above top - margin with that foot in platform contact, trunk
-    upright-ish (relaxed vs success: -0.7 instead of -0.9 — a mid-mount lean
-    still counts).  Latched, so unfarmable.  v7: the explicit rung between
-    "toes at the wall" and "both feet up" (probe8: 88% of edge spawns touched
-    the platform, 0% mounted — the ladder's landing_bonus lesson)."""
+    """One-shot (per episode) bonus for the FIRST foot on the platform top,
+    paid only for a DYNAMIC mount transition: at the step the counted foot
+    touches the platform top, the OTHER foot must be airborne (no ground and
+    no platform contact).  Trunk upright-ish (relaxed vs success: -0.7).
+
+    v8 anti-farm: the v7 policy latched this bonus by parking one foot on the
+    platform edge and never bringing the second foot up — a static park that
+    satisfied "foot on top + contact + upright" forever.  Requiring the
+    trailing foot airborne makes a quasi-static one-foot park worth exactly
+    zero; only a hop/step-up caught mid-flight pays.  Latched, so even a
+    valid transition pays once per episode."""
     state = _jump_step_state(env)
     asset: Entity = env.scene[asset_cfg.name]
     feet_z = torch.nan_to_num(asset.data.site_pos_w[:, asset_cfg.site_ids, 2], nan=0.0)
-    found = env.scene.sensors[sensor_name].data.found.reshape(env.num_envs, -1)[:, :2] > 0
-    on_top = ((feet_z > (state.top - foot_margin)[:, None]) & found).any(dim=1)
+    found_plat = env.scene.sensors[sensor_name].data.found.reshape(env.num_envs, -1)[:, :2] > 0
+    found_ground = env.scene.sensors[ground_sensor_name].data.found.reshape(env.num_envs, -1)[:, :2] > 0
+    on_top = (feet_z > (state.top - foot_margin)[:, None]) & found_plat
+    airborne = ~(found_plat | found_ground)
+    transition = (on_top[:, 0] & airborne[:, 1]) | (on_top[:, 1] & airborne[:, 0])
     upright = asset.data.projected_gravity_b[:, 2] < -upright_min
-    condition = on_top & upright
+    condition = transition & upright
     pay = (condition & ~state.first_foot_latched).float()
     state.first_foot_latched |= condition
     return pay
@@ -478,10 +488,11 @@ def jump_step_success(
     Rate-limited by construction (latched), so it is not a jackpot.
 
     Spawn-typed (v6): floor-born episodes (far or edge) pay in full;
-    platform-top-born episodes pay ``platform_spawn_scale`` of it (20 -> 3).
-    v5 paid full price for stand-still-on-spawn success and the policy
-    stopped approaching the platform entirely — the reverse-curriculum
-    experience is kept, but it must not out-earn the real maneuver."""
+    platform-top-born episodes pay ``platform_spawn_scale`` of it (kept at an
+    absolute 3 across weight changes).  v5 paid full price for stand-still-
+    on-spawn success and the policy stopped approaching the platform
+    entirely — the reverse-curriculum experience is kept, but it must not
+    out-earn the real maneuver."""
     state = _jump_step_state(env)
     condition = _success_condition(env, asset_cfg, sensor_name, foot_margin, upright_min)
     pay = (condition & ~state.success_latched).float()
@@ -660,7 +671,7 @@ def make_microduck_jump_step_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg
     )
     cfg.rewards["jump_step_success"] = RewardTermCfg(
         func=jump_step_success,
-        weight=20.0,
+        weight=40.0,  # v8: 20 -> 40, the full mount must out-earn every basin's dwell return
         params={"asset_cfg": feet, "sensor_name": PLATFORM_CONTACT_SENSOR},
     )
     # Self-negating cost: positive weight is intentional (it returns <= 0).
