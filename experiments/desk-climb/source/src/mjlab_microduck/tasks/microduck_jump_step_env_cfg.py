@@ -19,16 +19,18 @@ Task
 * Reward is episodic-style (AGENTS.md): potential-based trunk-height progress
   (paid on the DELTA of min(trunk_z, platform_top + 0.09), per-step capped —
   rising pays, holding pays zero, falling pays back, so it cannot be farmed),
-  a potential-based forward progress toward the platform centre (same
-  unfarmable delta shaping, floored at the platform edge), a per-foot
-  z-progress that pays only within 15 cm of the platform centre (teaches
-  clearing the top with the FEET, the piece "walk to the edge and freeze"
-  never found), a one-shot success bonus (both feet above the platform top,
-  feet supported by platform contact, trunk upright — full pay only for
-  episodes that started on the FLOOR; platform-top spawns collect a small
-  fraction so "stand still" cannot out-earn the approach, the v5 lesson),
-  an |a_z|-class landing-impact cost, and a light action-rate tax that stays
-  small during skill discovery.
+  a potential-based forward progress toward the platform centre measured on
+  the FEET (v7 — the trunk version was collected by leaning over the platform
+  head-first; feet don't advance during a lean), a per-foot z-progress that
+  pays only within 15 cm of the platform centre (teaches clearing the top
+  with the FEET), a one-shot first-foot-on-top bonus (the rung between
+  "toes at the wall" and "both feet up"), a head/trunk platform-contact
+  cost (the anti-lean price), a one-shot success bonus (both feet above the
+  platform top, feet supported by platform contact, trunk upright — full pay
+  only for episodes that started on the FLOOR; platform-top spawns collect a
+  small fraction so "stand still" cannot out-earn the approach, the v5
+  lesson), an |a_z|-class landing-impact cost, and a light action-rate tax
+  that stays small during skill discovery.
 * A fall terminates with no positive payoff; landing is a time_out success
   after the success condition holds for 0.4 s.
 
@@ -146,6 +148,7 @@ class _JumpStepState:
         self.prev_foot = torch.zeros(n, 2, device=dev)  # per-foot z potential
         self.foot_fresh = torch.ones(n, dtype=torch.bool, device=dev)
         self.success_latched = torch.zeros(n, dtype=torch.bool, device=dev)
+        self.first_foot_latched = torch.zeros(n, dtype=torch.bool, device=dev)
         self.prev_vz = torch.zeros(n, device=dev)
         self.hold_steps = torch.zeros(n, dtype=torch.long, device=dev)
         self.hold_step = -1
@@ -295,6 +298,7 @@ def reset_jump_step(
     state.forward_fresh[env_ids] = True
     state.foot_fresh[env_ids] = True
     state.success_latched[env_ids] = False
+    state.first_foot_latched[env_ids] = False
     state.hold_steps[env_ids] = 0
     state.prev_vz[env_ids] = 0.0
 
@@ -344,18 +348,25 @@ def jump_step_progress(
 
 def jump_step_forward_progress(
     env: ManagerBasedRlEnv,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", site_names=("left_foot", "right_foot")),
     max_delta: float = PROGRESS_MAX_DELTA_M,
 ) -> torch.Tensor:
     """Potential-based forward progress toward the platform centre: pays the
-    delta of -(trunk xy distance to the platform centre), per-step capped and
+    delta of -(FEET xy distance to the platform centre), per-step capped and
     floored at half the platform depth + 1 cm, so walking through/past the
-    platform or stepping back off cannot collect.  The pure-vertical progress
-    alone pays nothing for the approach (subagent note, 2026-09-23: blind
-    hop discovery needs a forward component to find the 20 cm gap)."""
+    platform or stepping back off cannot collect.
+
+    v7: measured on the mean FOOT position, not the trunk.  The trunk version
+    was collected by leaning chest/head over the platform with the feet
+    planted (probe8: 88% edge-spawn "contacts" were toes on the front face
+    during a head-first lean — the lean basin).  Feet don't advance during a
+    lean, so the lean pays nothing here.  The pure-vertical progress alone
+    pays nothing for the approach (blind hop discovery needs a forward
+    component to find the 20 cm gap)."""
     state = _jump_step_state(env)
     asset: Entity = env.scene[asset_cfg.name]
-    dist = (asset.data.root_link_pos_w[:, :2] - state.center_xy).norm(dim=1)
+    feet_xy = torch.nan_to_num(asset.data.site_pos_w[:, asset_cfg.site_ids, :2], nan=0.0)
+    dist = (feet_xy.mean(dim=1) - state.center_xy).norm(dim=1)
     floor = 0.5 * PLATFORM_DEPTH_M + 0.01
     potential = -torch.maximum(dist, torch.full_like(dist, floor))
     delta = (potential - state.prev_forward).clamp(-max_delta, max_delta)
@@ -413,6 +424,46 @@ def _success_condition(
     supported = (found > 0).all(dim=1)
     upright = asset.data.projected_gravity_b[:, 2] < -upright_min
     return high & supported & upright
+
+
+def jump_step_first_foot_bonus(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", site_names=("left_foot", "right_foot")),
+    sensor_name: str = PLATFORM_CONTACT_SENSOR,
+    foot_margin: float = SUCCESS_FOOT_MARGIN_M,
+    upright_min: float = 0.7,
+) -> torch.Tensor:
+    """One-shot (per episode) bonus for the FIRST foot on the platform top:
+    either foot above top - margin with that foot in platform contact, trunk
+    upright-ish (relaxed vs success: -0.7 instead of -0.9 — a mid-mount lean
+    still counts).  Latched, so unfarmable.  v7: the explicit rung between
+    "toes at the wall" and "both feet up" (probe8: 88% of edge spawns touched
+    the platform, 0% mounted — the ladder's landing_bonus lesson)."""
+    state = _jump_step_state(env)
+    asset: Entity = env.scene[asset_cfg.name]
+    feet_z = torch.nan_to_num(asset.data.site_pos_w[:, asset_cfg.site_ids, 2], nan=0.0)
+    found = env.scene.sensors[sensor_name].data.found.reshape(env.num_envs, -1)[:, :2] > 0
+    on_top = ((feet_z > (state.top - foot_margin)[:, None]) & found).any(dim=1)
+    upright = asset.data.projected_gravity_b[:, 2] < -upright_min
+    condition = on_top & upright
+    pay = (condition & ~state.first_foot_latched).float()
+    state.first_foot_latched |= condition
+    return pay
+
+
+def jump_step_body_contact_penalty(
+    env: ManagerBasedRlEnv,
+    sensor_name: str,
+) -> torch.Tensor:
+    """Self-negating cost (<= 0) on head/trunk contact with the platform.
+
+    v7 anti-lean term (probe8: the v6 policy mounts the platform head-first —
+    chest/beak on the top edge, feet planted — instead of stepping up).  Any
+    contact between the head/trunk bodies (see the sensor's primary pattern)
+    and the platform pays per step; feet and legs are free (a shin brushing
+    the face during a mount is fine, same tolerance as the ladder)."""
+    found = env.scene.sensors[sensor_name].data.found
+    return -torch.nan_to_num(found.reshape(env.num_envs, -1).any(dim=1), nan=0.0).float()
 
 
 def jump_step_success(
@@ -510,6 +561,22 @@ def make_microduck_jump_step_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg
         num_slots=1,
     )
     cfg.scene.sensors = (*cfg.scene.sensors, feet_platform_cfg)
+    # Head/trunk vs platform (v7 anti-lean): chest/beak on the platform pays,
+    # feet and legs are free.  Body names from the allcollisions model:
+    # trunk/neck/head only — hip/leg/ankle bodies are deliberately excluded.
+    body_platform_cfg = ContactSensorCfg(
+        name="body_platform_contact",
+        primary=ContactMatch(
+            mode="body",
+            pattern=r"^(trunk_base|neck|neck_pitch|yaw_roll_motion|jaw_soft|mouth)$",
+            entity="robot",
+        ),
+        secondary=ContactMatch(mode="body", pattern=PLATFORM_ENTITY, entity=PLATFORM_ENTITY),
+        fields=("found",),
+        reduce="none",
+        num_slots=1,
+    )
+    cfg.scene.sensors = (*cfg.scene.sensors, body_platform_cfg)
     cfg.viewer.body_name = "trunk_base"
     cfg.viewer.distance = 0.7
     cfg.episode_length_s = EPISODE_LENGTH_S
@@ -573,12 +640,23 @@ def make_microduck_jump_step_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg
     cfg.rewards["jump_step_forward_progress"] = RewardTermCfg(
         func=jump_step_forward_progress,
         weight=30.0,
-        params={"asset_cfg": robot, "max_delta": PROGRESS_MAX_DELTA_M},
+        params={"asset_cfg": feet, "max_delta": PROGRESS_MAX_DELTA_M},
     )
     cfg.rewards["jump_step_foot_progress"] = RewardTermCfg(
         func=jump_step_foot_progress,
         weight=30.0,
         params={"asset_cfg": feet, "max_delta": PROGRESS_MAX_DELTA_M, "gate_radius": FOOT_PROGRESS_GATE_M},
+    )
+    cfg.rewards["jump_step_first_foot_bonus"] = RewardTermCfg(
+        func=jump_step_first_foot_bonus,
+        weight=5.0,
+        params={"asset_cfg": feet, "sensor_name": PLATFORM_CONTACT_SENSOR},
+    )
+    # Self-negating cost: positive weight is intentional (it returns <= 0).
+    cfg.rewards["body_platform_contact"] = RewardTermCfg(
+        func=jump_step_body_contact_penalty,
+        weight=0.05,
+        params={"sensor_name": "body_platform_contact"},
     )
     cfg.rewards["jump_step_success"] = RewardTermCfg(
         func=jump_step_success,
