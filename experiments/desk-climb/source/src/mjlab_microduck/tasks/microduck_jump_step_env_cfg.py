@@ -5,19 +5,26 @@ stack, 61-D observation contract) with flat terrain plus one mocap platform.
 
 Task
 ----
-* The robot spawns in the HOME stance on flat ground, facing +x, with a
-  60 mm deep x 230 mm wide platform 0.18-0.25 m ahead.  The platform top
-  height IS the twist command: ``vx`` is sampled in 0.03-0.06 m and the reset
-  event places the mocap platform so its top sits at that height.  Jump onto
-  the platform and stand.
+* The robot spawns in the HOME stance facing +x, with a 60 mm deep x 230 mm
+  wide platform 0.18-0.25 m ahead — or, for a ``platform_spawn_prob`` fraction
+  of episodes, already standing on the platform top (reverse curriculum: the
+  success state gets on-policy value before the jump from the floor is ever
+  discovered).  The platform top height IS the twist command: ``vx`` is
+  sampled in 0.025-0.035 m (inside the step-up envelope — v5 narrowed it from
+  0.03-0.06 to first prove "get on top" works) and the reset event places the
+  mocap platform so its top sits at that height.  Jump onto the platform and
+  stand.
 * Reward is episodic-style (AGENTS.md): potential-based trunk-height progress
   (paid on the DELTA of min(trunk_z, platform_top + 0.09), per-step capped —
   rising pays, holding pays zero, falling pays back, so it cannot be farmed),
   a potential-based forward progress toward the platform centre (same
-  unfarmable delta shaping, floored at the platform edge),
-  a one-shot success bonus (both feet above the platform top, feet supported
-  by platform contact, trunk upright), an |a_z|-class landing-impact cost,
-  and a light action-rate tax that stays small during skill discovery.
+  unfarmable delta shaping, floored at the platform edge), a per-foot
+  z-progress that pays only within 15 cm of the platform centre (teaches
+  clearing the top with the FEET, the piece "walk to the edge and freeze"
+  never found), a one-shot success bonus (both feet above the platform top,
+  feet supported by platform contact, trunk upright), an |a_z|-class
+  landing-impact cost, and a light action-rate tax that stays small during
+  skill discovery.
 * A fall terminates with no positive payoff; landing is a time_out success
   after the success condition holds for 0.4 s.
 
@@ -75,12 +82,13 @@ PLATFORM_CONTACT_SENSOR = "feet_platform_contact"
 PLATFORM_DEPTH_M = 0.060  # x extent: the whole 54 mm sole fits on top
 PLATFORM_WIDTH_M = 0.230  # y extent
 PLATFORM_HALF_THICKNESS_M = 0.015  # 30 mm slab; the top follows the command
-PLATFORM_HEIGHT_RANGE = (0.03, 0.06)  # m, sampled as the twist vx command
+PLATFORM_HEIGHT_RANGE = (0.025, 0.035)  # m, sampled as the twist vx command
 PLATFORM_DISTANCE_RANGE = (0.18, 0.25)  # m, robot root to the platform front face
 
 EPISODE_LENGTH_S = 5.0
 PROGRESS_CAP_ABOVE_TOP_M = 0.09  # pay min(trunk_z, top + this) deltas
 PROGRESS_MAX_DELTA_M = 0.005  # per-step pay cap (anti-jackpot rate limit)
+FOOT_PROGRESS_GATE_M = 0.15  # foot z-progress pays only this near the platform centre
 SUCCESS_FOOT_MARGIN_M = 0.005  # both feet above top - this
 SUCCESS_UPRIGHT_MIN = 0.9  # -projected_gravity_b z
 SUCCESS_HOLD_S = 0.4
@@ -124,6 +132,8 @@ class _JumpStepState:
         self.potential_fresh = torch.ones(n, dtype=torch.bool, device=dev)
         self.prev_forward = torch.zeros(n, device=dev)
         self.forward_fresh = torch.ones(n, dtype=torch.bool, device=dev)
+        self.prev_foot = torch.zeros(n, 2, device=dev)  # per-foot z potential
+        self.foot_fresh = torch.ones(n, dtype=torch.bool, device=dev)
         self.success_latched = torch.zeros(n, dtype=torch.bool, device=dev)
         self.prev_vz = torch.zeros(n, device=dev)
         self.hold_steps = torch.zeros(n, dtype=torch.long, device=dev)
@@ -159,8 +169,17 @@ def reset_jump_step(
     yaw_noise_deg: float = 5.0,
     tilt_noise_deg: float = 2.0,
     joint_noise: float = 0.03,
+    platform_spawn_prob: float = 0.3,
 ) -> None:
     """Spawn the robot in HOME stance facing +x and place the platform ahead of it.
+
+    A ``platform_spawn_prob`` fraction of episodes instead spawn the robot
+    already standing on the platform top (reverse curriculum): root 10 mm
+    behind the platform centre so the whole sole (toe +31 mm / heel -17 mm of
+    the ankle site, on a 60 mm deep top) rests on the platform, z = platform
+    top + the usual standing root height.  Those episodes latch the success
+    bonus within the first steps — the policy experiences the goal state and
+    its value before the jump from the floor is ever discovered.
 
     The platform top follows the twist ``vx`` command.  Commands resample AFTER
     reset events (see module docstring), so the read here can be one episode
@@ -188,10 +207,30 @@ def reset_jump_step(
     state.synced_height[env_ids] = height
     _mocap_write(env, state, env_ids)
 
-    # Robot root: HOME stance at the env origin, yaw ~0 (facing +x), small noise.
+    # Robot root: HOME stance, yaw ~0 (facing +x), small noise.  Floor spawns
+    # stand at the env origin; platform spawns stand on the platform top.
+    on_platform = torch.rand(n, device=dev) < platform_spawn_prob
     xy_noise = (torch.rand(n, 2, device=dev) * 2.0 - 1.0) * position_noise
+    # Tighter jitter on the platform so both soles stay inside the 60 mm depth.
+    plat_noise = (torch.rand(n, 2, device=dev) * 2.0 - 1.0) * 0.002
     root_pos = torch.stack(
-        (origins[:, 0] + xy_noise[:, 0], origins[:, 1] + xy_noise[:, 1], origins[:, 2] + spawn_z),
+        (
+            torch.where(
+                on_platform,
+                state.center_xy[env_ids, 0] - 0.010 + plat_noise[:, 0],
+                origins[:, 0] + xy_noise[:, 0],
+            ),
+            torch.where(
+                on_platform,
+                state.center_xy[env_ids, 1] + plat_noise[:, 1],
+                origins[:, 1] + xy_noise[:, 1],
+            ),
+            torch.where(
+                on_platform,
+                state.top[env_ids] + spawn_z,
+                origins[:, 2] + spawn_z,
+            ),
+        ),
         dim=-1,
     )
     yaw = (torch.rand(n, device=dev) * 2.0 - 1.0) * math.radians(yaw_noise_deg)
@@ -220,6 +259,7 @@ def reset_jump_step(
 
     state.potential_fresh[env_ids] = True
     state.forward_fresh[env_ids] = True
+    state.foot_fresh[env_ids] = True
     state.success_latched[env_ids] = False
     state.hold_steps[env_ids] = 0
     state.prev_vz[env_ids] = 0.0
@@ -289,6 +329,38 @@ def jump_step_forward_progress(
     state.prev_forward = potential
     state.forward_fresh = torch.zeros_like(state.forward_fresh)
     return torch.nan_to_num(delta, nan=0.0)
+
+
+def jump_step_foot_progress(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", site_names=("left_foot", "right_foot")),
+    max_delta: float = PROGRESS_MAX_DELTA_M,
+    gate_radius: float = FOOT_PROGRESS_GATE_M,
+) -> torch.Tensor:
+    """Per-foot z progress toward the platform top, gated on proximity.
+
+    Potential per foot = min(foot_z, platform_top); pays the per-step capped
+    delta, but only while the foot is within ``gate_radius`` of the platform
+    centre horizontally — the approach is already paid by
+    ``jump_step_forward_progress``, this term teaches clearing the top with
+    the FEET once close.  Unfarmable the same way as the trunk terms: bobbing
+    a foot below the top nets zero, holding pays zero, above the top is
+    capped, and the first step after a reset only establishes the potential.
+    The two feet are MEAN-combined (not max): a two-footed lift collects in
+    full, a single-foot lift collects half, so the lagging foot always keeps
+    its gradient (a max would saturate on one foot and let the other dangle).
+    """
+    state = _jump_step_state(env)
+    asset: Entity = env.scene[asset_cfg.name]
+    feet = torch.nan_to_num(asset.data.site_pos_w[:, asset_cfg.site_ids], nan=0.0)  # (N, 2, 3)
+    potential = torch.minimum(feet[:, :, 2], state.top[:, None])
+    delta = (potential - state.prev_foot).clamp(-max_delta, max_delta)
+    delta = torch.where(state.foot_fresh[:, None], torch.zeros_like(delta), delta)
+    near = (feet[:, :, :2] - state.center_xy[:, None, :]).norm(dim=2) < gate_radius
+    pay = (delta * near).mean(dim=1)
+    state.prev_foot = potential
+    state.foot_fresh = torch.zeros_like(state.foot_fresh)
+    return torch.nan_to_num(pay, nan=0.0)
 
 
 def _success_condition(
@@ -461,6 +533,11 @@ def make_microduck_jump_step_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg
         weight=30.0,
         params={"asset_cfg": robot, "max_delta": PROGRESS_MAX_DELTA_M},
     )
+    cfg.rewards["jump_step_foot_progress"] = RewardTermCfg(
+        func=jump_step_foot_progress,
+        weight=30.0,
+        params={"asset_cfg": feet, "max_delta": PROGRESS_MAX_DELTA_M, "gate_radius": FOOT_PROGRESS_GATE_M},
+    )
     cfg.rewards["jump_step_success"] = RewardTermCfg(
         func=jump_step_success,
         weight=20.0,
@@ -479,7 +556,12 @@ def make_microduck_jump_step_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg
     reset_term = EventTermCfg(
         func=reset_jump_step,
         mode="reset",
-        params={"asset_cfg": robot},
+        params={
+            "asset_cfg": robot,
+            # Reverse-curriculum spawns in training.  OFF in play/eval so the
+            # eval success rate measures the actual jump, not free successes.
+            "platform_spawn_prob": 0.0 if play else 0.3,
+        },
     )
     # Run the spawn before every other reset event.
     cfg.events = {"reset_jump_step": reset_term, **cfg.events}
