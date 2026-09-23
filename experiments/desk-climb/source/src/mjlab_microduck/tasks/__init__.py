@@ -400,3 +400,18 @@ register_mjlab_task(task_id='Mjlab-FloorDeskBlind-MicroDuck',env_cfg=make_floor_
 
 from .microduck_desk_recovery_env_cfg import make_desk_recovery,DeskRecoveryRlCfg
 register_mjlab_task(task_id='Mjlab-DeskRecoveryBlind-MicroDuck',env_cfg=make_desk_recovery(),play_env_cfg=make_desk_recovery(play=True),rl_cfg=DeskRecoveryRlCfg,runner_cls=MicroduckOnPolicyRunner)
+
+# JumpStep task — single low platform (top height = twist vx command), jump up
+# and stand (see make_microduck_jump_step_env_cfg).  All-collision robot: a jump
+# landing can clip the trunk/head on the platform edge.  61D/14D contracts kept.
+from .microduck_jump_step_env_cfg import (
+    make_microduck_jump_step_env_cfg,
+    MicroduckJumpStepRlCfg,
+)
+register_mjlab_task(
+    task_id="Mjlab-JumpStep-MicroDuck",
+    env_cfg=make_microduck_jump_step_env_cfg(),
+    play_env_cfg=make_microduck_jump_step_env_cfg(play=True),
+    rl_cfg=MicroduckJumpStepRlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
