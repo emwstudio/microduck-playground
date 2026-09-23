@@ -28,6 +28,13 @@ matches what the actor observes in the twist slot.  The resampling interval
 (8-12 s) is longer than the 5 s episode, so the command is constant per
 episode and the sync fires once per reset in practice.
 
+Config landmine (cost a full 2000-iter run, 2026-09-23): the base velocity
+template sets ``rel_forward_envs=0.2`` — forward envs get
+``vx = |vx|.clamp(min=0.3)`` on every resample, silently overwriting the
+0.03-0.06 platform height with a 30 cm slab floating in the sky on ~20% of
+episodes.  ``rel_forward_envs`` (like rel_standing/heading/turn) MUST be
+zeroed when repurposing the twist slot for a non-locomotion command.
+
 Observation contract is untouched: twist slot = [platform height, 0, 0],
 head/body slots keep the velocity defaults (tiny alive ranges).
 """
@@ -373,6 +380,10 @@ def make_microduck_jump_step_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg
     twist.rel_standing_envs = 0.0
     twist.rel_turn_in_place_envs = 0.0
     twist.rel_heading_envs = 0.0
+    # Base velocity template sets rel_forward_envs=0.2: those envs get
+    # vx = |vx|.clamp(min=0.3) (mjlab velocity_command.py), i.e. a 30 cm
+    # "platform" floating in the sky on ~20% of episodes.  Must be 0 here.
+    twist.rel_forward_envs = 0.0
     twist.heading_command = False
     twist.ranges.heading = None
     twist.resampling_time_range = (8.0, 12.0)
