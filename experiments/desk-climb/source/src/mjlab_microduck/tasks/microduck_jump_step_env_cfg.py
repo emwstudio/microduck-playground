@@ -6,14 +6,16 @@ stack, 61-D observation contract) with flat terrain plus one mocap platform.
 Task
 ----
 * The robot spawns in the HOME stance facing +x, with a 60 mm deep x 230 mm
-  wide platform 0.18-0.25 m ahead — or, for a ``platform_spawn_prob`` fraction
-  of episodes, already standing on the platform top (reverse curriculum: the
-  success state gets on-policy value before the jump from the floor is ever
-  discovered).  The platform top height IS the twist command: ``vx`` is
-  sampled in 0.025-0.035 m (inside the step-up envelope — v5 narrowed it from
-  0.03-0.06 to first prove "get on top" works) and the reset event places the
-  mocap platform so its top sits at that height.  Jump onto the platform and
-  stand.
+  wide platform ahead.  Spawn mix (v6): ``platform_spawn_prob`` (0.2) already
+  standing on the platform top (reverse curriculum of the goal state),
+  ``edge_spawn_prob`` (0.2) on the floor only 0.04-0.08 m from the platform's
+  front face (reverse curriculum of the takeoff: an exploratory foot lift is
+  immediately inside the foot-progress gate and can meet the success
+  condition), and the rest on the floor 0.18-0.25 m away.  The platform top
+  height IS the twist command: ``vx`` is sampled in 0.025-0.035 m (inside the
+  step-up envelope — v5 narrowed it from 0.03-0.06 to first prove "get on
+  top" works) and the reset event places the mocap platform so its top sits
+  at that height.  Jump onto the platform and stand.
 * Reward is episodic-style (AGENTS.md): potential-based trunk-height progress
   (paid on the DELTA of min(trunk_z, platform_top + 0.09), per-step capped —
   rising pays, holding pays zero, falling pays back, so it cannot be farmed),
@@ -22,9 +24,11 @@ Task
   z-progress that pays only within 15 cm of the platform centre (teaches
   clearing the top with the FEET, the piece "walk to the edge and freeze"
   never found), a one-shot success bonus (both feet above the platform top,
-  feet supported by platform contact, trunk upright), an |a_z|-class
-  landing-impact cost, and a light action-rate tax that stays small during
-  skill discovery.
+  feet supported by platform contact, trunk upright — full pay only for
+  episodes that started on the FLOOR; platform-top spawns collect a small
+  fraction so "stand still" cannot out-earn the approach, the v5 lesson),
+  an |a_z|-class landing-impact cost, and a light action-rate tax that stays
+  small during skill discovery.
 * A fall terminates with no positive payoff; landing is a time_out success
   after the success condition holds for 0.4 s.
 
@@ -84,6 +88,12 @@ PLATFORM_WIDTH_M = 0.230  # y extent
 PLATFORM_HALF_THICKNESS_M = 0.015  # 30 mm slab; the top follows the command
 PLATFORM_HEIGHT_RANGE = (0.025, 0.035)  # m, sampled as the twist vx command
 PLATFORM_DISTANCE_RANGE = (0.18, 0.25)  # m, robot root to the platform front face
+EDGE_DISTANCE_RANGE = (0.04, 0.08)  # m, edge-spawn root to the front face
+
+# Spawn types (per-episode, recorded at reset for spawn-typed rewards).
+SPAWN_FLOOR = 0  # far floor spawn (PLATFORM_DISTANCE_RANGE)
+SPAWN_EDGE = 1  # near-edge floor spawn (EDGE_DISTANCE_RANGE)
+SPAWN_PLATFORM = 2  # reverse-curriculum spawn on the platform top
 
 EPISODE_LENGTH_S = 5.0
 PROGRESS_CAP_ABOVE_TOP_M = 0.09  # pay min(trunk_z, top + this) deltas
@@ -92,6 +102,7 @@ FOOT_PROGRESS_GATE_M = 0.15  # foot z-progress pays only this near the platform 
 SUCCESS_FOOT_MARGIN_M = 0.005  # both feet above top - this
 SUCCESS_UPRIGHT_MIN = 0.9  # -projected_gravity_b z
 SUCCESS_HOLD_S = 0.4
+SUCCESS_PLATFORM_SPAWN_SCALE = 0.15  # platform-top spawns collect 20 * this = 3
 FALLEN_GRAVITY_Z = -0.5  # fallen: projected_gravity_b z above this
 
 
@@ -138,6 +149,7 @@ class _JumpStepState:
         self.prev_vz = torch.zeros(n, device=dev)
         self.hold_steps = torch.zeros(n, dtype=torch.long, device=dev)
         self.hold_step = -1
+        self.spawn_type = torch.zeros(n, dtype=torch.long, device=dev)  # SPAWN_*
 
 
 def _jump_step_state(env: ManagerBasedRlEnv) -> _JumpStepState:
@@ -164,22 +176,33 @@ def reset_jump_step(
     env_ids: torch.Tensor,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     distance_range: tuple[float, float] = PLATFORM_DISTANCE_RANGE,
+    edge_distance_range: tuple[float, float] = EDGE_DISTANCE_RANGE,
     spawn_z: float = 0.122,
     position_noise: float = 0.005,
     yaw_noise_deg: float = 5.0,
     tilt_noise_deg: float = 2.0,
     joint_noise: float = 0.03,
-    platform_spawn_prob: float = 0.3,
+    platform_spawn_prob: float = 0.2,
+    edge_spawn_prob: float = 0.2,
 ) -> None:
     """Spawn the robot in HOME stance facing +x and place the platform ahead of it.
 
-    A ``platform_spawn_prob`` fraction of episodes instead spawn the robot
-    already standing on the platform top (reverse curriculum): root 10 mm
-    behind the platform centre so the whole sole (toe +31 mm / heel -17 mm of
-    the ankle site, on a 60 mm deep top) rests on the platform, z = platform
-    top + the usual standing root height.  Those episodes latch the success
-    bonus within the first steps — the policy experiences the goal state and
-    its value before the jump from the floor is ever discovered.
+    Three spawn types (v6 mix):
+
+    * ``platform_spawn_prob``: already standing on the platform top (reverse
+      curriculum of the goal state): root 10 mm behind the platform centre so
+      the whole sole (toe +31 mm / heel -17 mm of the ankle site, on a 60 mm
+      deep top) rests on the platform, z = platform top + the usual standing
+      root height.  The success condition latches within the first steps —
+      but v6 pays those episodes only a fraction of the bonus (v5 lesson:
+      full-pay stand-still success suppressed the approach).
+    * ``edge_spawn_prob``: on the floor only ``edge_distance_range`` from the
+      platform's front face (reverse curriculum of the takeoff — the feet
+      start inside the foot-progress gate, so any exploratory lift can meet
+      the success condition).
+    * the rest: on the floor ``distance_range`` ahead of the front face.
+
+    Every spawn records its type in ``state.spawn_type`` (SPAWN_*).
 
     The platform top follows the twist ``vx`` command.  Commands resample AFTER
     reset events (see module docstring), so the read here can be one episode
@@ -196,11 +219,23 @@ def reset_jump_step(
     asset: Entity = env.scene[asset_cfg.name]
     origins = env.scene.env_origins[env_ids]
 
+    # Spawn-type draw (edge spawns change where the platform goes, so first).
+    u = torch.rand(n, device=dev)
+    on_platform = u < platform_spawn_prob
+    on_edge = (u >= platform_spawn_prob) & (u < platform_spawn_prob + edge_spawn_prob)
+    state.spawn_type[env_ids] = torch.where(
+        on_platform,
+        torch.full_like(u, SPAWN_PLATFORM, dtype=torch.long),
+        torch.where(on_edge, torch.full_like(u, SPAWN_EDGE, dtype=torch.long), torch.full_like(u, SPAWN_FLOOR, dtype=torch.long)),
+    )
+
     # Platform: front face ``distance`` ahead of the robot root, top at the
     # commanded height (clamped: the pre-first-resample command is all zeros).
     command = env.command_manager.get_command("twist")[:, 0]
     height = command[env_ids].clamp(*PLATFORM_HEIGHT_RANGE)
-    distance = distance_range[0] + torch.rand(n, device=dev) * (distance_range[1] - distance_range[0])
+    far = distance_range[0] + torch.rand(n, device=dev) * (distance_range[1] - distance_range[0])
+    near = edge_distance_range[0] + torch.rand(n, device=dev) * (edge_distance_range[1] - edge_distance_range[0])
+    distance = torch.where(on_edge, near, far)
     state.center_xy[env_ids, 0] = origins[:, 0] + distance + 0.5 * PLATFORM_DEPTH_M
     state.center_xy[env_ids, 1] = origins[:, 1]
     state.top[env_ids] = origins[:, 2] + height
@@ -208,8 +243,7 @@ def reset_jump_step(
     _mocap_write(env, state, env_ids)
 
     # Robot root: HOME stance, yaw ~0 (facing +x), small noise.  Floor spawns
-    # stand at the env origin; platform spawns stand on the platform top.
-    on_platform = torch.rand(n, device=dev) < platform_spawn_prob
+    # (far and edge) stand at the env origin; platform spawns stand on the top.
     xy_noise = (torch.rand(n, 2, device=dev) * 2.0 - 1.0) * position_noise
     # Tighter jitter on the platform so both soles stay inside the 60 mm depth.
     plat_noise = (torch.rand(n, 2, device=dev) * 2.0 - 1.0) * 0.002
@@ -387,14 +421,22 @@ def jump_step_success(
     sensor_name: str = PLATFORM_CONTACT_SENSOR,
     foot_margin: float = SUCCESS_FOOT_MARGIN_M,
     upright_min: float = SUCCESS_UPRIGHT_MIN,
+    platform_spawn_scale: float = SUCCESS_PLATFORM_SPAWN_SCALE,
 ) -> torch.Tensor:
     """One-shot (per episode) bonus for landing on the platform, upright.
-    Rate-limited by construction (latched), so it is not a jackpot."""
+    Rate-limited by construction (latched), so it is not a jackpot.
+
+    Spawn-typed (v6): floor-born episodes (far or edge) pay in full;
+    platform-top-born episodes pay ``platform_spawn_scale`` of it (20 -> 3).
+    v5 paid full price for stand-still-on-spawn success and the policy
+    stopped approaching the platform entirely — the reverse-curriculum
+    experience is kept, but it must not out-earn the real maneuver."""
     state = _jump_step_state(env)
     condition = _success_condition(env, asset_cfg, sensor_name, foot_margin, upright_min)
     pay = (condition & ~state.success_latched).float()
+    scale = torch.where(state.spawn_type == SPAWN_PLATFORM, torch.full_like(pay, platform_spawn_scale), torch.ones_like(pay))
     state.success_latched |= condition
-    return pay
+    return pay * scale
 
 
 def jump_step_vertical_impact_penalty(
@@ -560,7 +602,8 @@ def make_microduck_jump_step_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg
             "asset_cfg": robot,
             # Reverse-curriculum spawns in training.  OFF in play/eval so the
             # eval success rate measures the actual jump, not free successes.
-            "platform_spawn_prob": 0.0 if play else 0.3,
+            "platform_spawn_prob": 0.0 if play else 0.2,
+            "edge_spawn_prob": 0.0 if play else 0.2,
         },
     )
     # Run the spawn before every other reset event.
