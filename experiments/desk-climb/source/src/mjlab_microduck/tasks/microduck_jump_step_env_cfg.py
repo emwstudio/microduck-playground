@@ -13,6 +13,8 @@ Task
 * Reward is episodic-style (AGENTS.md): potential-based trunk-height progress
   (paid on the DELTA of min(trunk_z, platform_top + 0.09), per-step capped —
   rising pays, holding pays zero, falling pays back, so it cannot be farmed),
+  a potential-based forward progress toward the platform centre (same
+  unfarmable delta shaping, floored at the platform edge),
   a one-shot success bonus (both feet above the platform top, feet supported
   by platform contact, trunk upright), an |a_z|-class landing-impact cost,
   and a light action-rate tax that stays small during skill discovery.
@@ -120,6 +122,8 @@ class _JumpStepState:
         self.synced_height = torch.full((n,), -1.0, device=dev)  # command the mocap pose reflects
         self.prev_potential = torch.zeros(n, device=dev)
         self.potential_fresh = torch.ones(n, dtype=torch.bool, device=dev)
+        self.prev_forward = torch.zeros(n, device=dev)
+        self.forward_fresh = torch.ones(n, dtype=torch.bool, device=dev)
         self.success_latched = torch.zeros(n, dtype=torch.bool, device=dev)
         self.prev_vz = torch.zeros(n, device=dev)
         self.hold_steps = torch.zeros(n, dtype=torch.long, device=dev)
@@ -215,6 +219,7 @@ def reset_jump_step(
         sim.data.qacc_warmstart[env_ids] = 0.0
 
     state.potential_fresh[env_ids] = True
+    state.forward_fresh[env_ids] = True
     state.success_latched[env_ids] = False
     state.hold_steps[env_ids] = 0
     state.prev_vz[env_ids] = 0.0
@@ -260,6 +265,29 @@ def jump_step_progress(
     delta = torch.where(state.potential_fresh, torch.zeros_like(delta), delta)
     state.prev_potential = potential
     state.potential_fresh = torch.zeros_like(state.potential_fresh)
+    return torch.nan_to_num(delta, nan=0.0)
+
+
+def jump_step_forward_progress(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    max_delta: float = PROGRESS_MAX_DELTA_M,
+) -> torch.Tensor:
+    """Potential-based forward progress toward the platform centre: pays the
+    delta of -(trunk xy distance to the platform centre), per-step capped and
+    floored at half the platform depth + 1 cm, so walking through/past the
+    platform or stepping back off cannot collect.  The pure-vertical progress
+    alone pays nothing for the approach (subagent note, 2026-09-23: blind
+    hop discovery needs a forward component to find the 20 cm gap)."""
+    state = _jump_step_state(env)
+    asset: Entity = env.scene[asset_cfg.name]
+    dist = (asset.data.root_link_pos_w[:, :2] - state.center_xy).norm(dim=1)
+    floor = 0.5 * PLATFORM_DEPTH_M + 0.01
+    potential = -torch.maximum(dist, torch.full_like(dist, floor))
+    delta = (potential - state.prev_forward).clamp(-max_delta, max_delta)
+    delta = torch.where(state.forward_fresh, torch.zeros_like(delta), delta)
+    state.prev_forward = potential
+    state.forward_fresh = torch.zeros_like(state.forward_fresh)
     return torch.nan_to_num(delta, nan=0.0)
 
 
@@ -426,6 +454,11 @@ def make_microduck_jump_step_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg
     cfg.rewards["jump_step_progress"] = RewardTermCfg(
         func=jump_step_progress,
         weight=50.0,
+        params={"asset_cfg": robot, "max_delta": PROGRESS_MAX_DELTA_M},
+    )
+    cfg.rewards["jump_step_forward_progress"] = RewardTermCfg(
+        func=jump_step_forward_progress,
+        weight=30.0,
         params={"asset_cfg": robot, "max_delta": PROGRESS_MAX_DELTA_M},
     )
     cfg.rewards["jump_step_success"] = RewardTermCfg(
