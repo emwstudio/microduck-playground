@@ -106,9 +106,34 @@ def _load_snapshot_mdp():
 def test_factory_wiring_open_riser_only_for_simple_stairs():
     from mjlab_microduck.tasks import microduck_ladder_env_cfg as ladder_mod
 
-    ladder_mod.microduck_mdp = _load_snapshot_mdp()
+    snap_mdp = _load_snapshot_mdp()
+    ladder_mod.microduck_mdp = snap_mdp
+    ss.microduck_mdp = snap_mdp
     cfg = ss.make_microduck_simple_stairs_env_cfg()
     assert cfg.events["reset_stair_ladder"].params["open_riser"] is True
     # The alternating ladder family must be zero-change: default stays False.
     ladder_cfg = ladder_mod.make_microduck_ladder_env_cfg()
     assert ladder_cfg.events["reset_stair_ladder"].params["open_riser"] is False
+
+
+def test_v13_stall_penalty_and_overshoot_clearance():
+    from mjlab_microduck.tasks import microduck_ladder_env_cfg as ladder_mod
+
+    snap_mdp = _load_snapshot_mdp()
+    ladder_mod.microduck_mdp = snap_mdp
+    ss.microduck_mdp = snap_mdp  # the simple_stairs module bound the main mdp at import
+    cfg = ss.make_microduck_simple_stairs_env_cfg()
+    # F1: the anti-park stall penalty is wired, self-negating -> POSITIVE weight
+    assert "tread_stall" in cfg.rewards
+    assert cfg.rewards["tread_stall"].weight == 2.0
+    assert cfg.rewards["tread_stall"].params["stall_s"] == 2.0
+    # F2: the overshoot ceiling now covers the official gait family's foot apex
+    assert cfg.rewards["swing_overshoot"].params["clearance"] == 0.05
+    l0_riser_hi = ss.SIMPLE_STAIRS_LEVELS[0]["riser"][1]  # 0.017
+    l4_riser_hi = ss.SIMPLE_STAIRS_LEVELS[-1]["riser"][1]  # 0.0255
+    assert l0_riser_hi + 0.003 + 0.05 >= 0.0666  # official median foot apex
+    assert l4_riser_hi + 0.003 + 0.05 >= 0.0724  # official p90 foot apex
+    # The ladder family reward table is zero-change (F1/F2 live only in simple_stairs).
+    ladder_cfg = ladder_mod.make_microduck_ladder_env_cfg()
+    assert "tread_stall" not in ladder_cfg.rewards
+    assert ladder_cfg.rewards["swing_overshoot"].params["clearance"] == 0.025

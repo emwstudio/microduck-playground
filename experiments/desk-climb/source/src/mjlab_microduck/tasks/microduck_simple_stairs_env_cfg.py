@@ -16,18 +16,28 @@ run >= tread depth + 2 mm (see ladder.clamp_riser_angle).  The level table
 below is drawn up so every band already satisfies the gap at its lower
 riser, so the clamp is a guard, not a distortion.  12 treads up to a
 full-depth top platform.
+
+v13 reward patch (v12 diagnosis: the "2-tread wall"): F1 wires the
+staircase family's tread-stall price into this recipe (the stance term pays
+~0.54/step for parking on treads under a climb command, and the plain
+ladder recipe has no anti-park term); F2 widens the swing-overshoot
+clearance 25 -> 50 mm so the official gait family's ~67 mm foot apex is
+legal at the shallow 15-17 mm risers (the ceiling is support + riser +
+3 mm + clearance on this one-riser-spacing geometry).
 """
 
 import os
 from copy import deepcopy
 
 from mjlab.envs import ManagerBasedRlEnvCfg
+from mjlab.managers import RewardTermCfg
 
 from ..robot.ladder import StairLadderGeometry
 from .microduck_ladder_env_cfg import (
     MicroduckLadderRlCfg,
     make_microduck_ladder_env_cfg,
 )
+from mjlab_microduck.tasks import mdp as microduck_mdp
 
 # 12 treads up to a full-depth top platform.
 SIMPLE_STAIRS_GEOMETRY = StairLadderGeometry(
@@ -112,6 +122,28 @@ def make_microduck_simple_stairs_env_cfg(
         top_spawn_prob=top_spawn_prob,
         open_riser=True,  # v12: 25 mm risers through the open gap, not under the tread
     )
+    # v13 F1: anti-park.  The stance composite pays ~0.54/step for standing on
+    # treads under a climb command (track factor 0.27 x weight 2.0), and the
+    # plain ladder recipe carries no stall price — the v12 policy mounts 1-2
+    # treads and parks ("低头站桩", retreated rising).  The staircase-landing
+    # family fixed this exact basin with ladder_tread_stall_penalty (s15-17);
+    # it was never wired into the plain ladder recipe.  Weight 2.0 ≈ 4x the
+    # park's per-step income, so parking goes net-negative while a climb that
+    # progresses every 2 s is untouched (the counter re-arms on each new
+    # tread).  Self-negating function -> POSITIVE weight.
+    cfg.rewards["tread_stall"] = RewardTermCfg(
+        func=microduck_mdp.ladder_tread_stall_penalty,
+        weight=2.0,
+        params={"stall_s": 2.0},
+    )
+    # v13 F2: let the natural step fit under the overshoot ceiling.  With
+    # same_side_spacing=1 the ceiling is support + riser + 3 mm + clearance =
+    # 44 mm at the 15-17 mm level-0 risers, taxing the official gait family's
+    # median 66.6 mm foot apex at ~1.15/step (the alternating ladder is free:
+    # two risers + 28 mm = 76-88 mm).  clearance 0.025 -> 0.05 raises the L0
+    # ceiling to 69 mm (covers the 66.6 median; p90 72.4 keeps a small tax as
+    # anti-fling pressure) and the L4 ceiling to 78 mm.
+    cfg.rewards["swing_overshoot"].params["clearance"] = 0.05
     if per_side_targets:
         from mjlab.managers import SceneEntityCfg
 
