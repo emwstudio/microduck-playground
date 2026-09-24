@@ -6,19 +6,21 @@ stack, 61-D observation contract) with flat terrain plus one mocap platform.
 Task
 ----
 * The robot spawns facing +x with a 60 mm deep x 230 mm wide platform ahead.
-  Spawn mix (v9): ``airborne_spawn_prob`` (0.6 -> 0 by curriculum) in mid-air
-  above the platform, dropping 8-15 cm onto it — bulk experience of the
-  nearly-done "fall on and stand" state (v4-v8 lesson: the takeoff was never
-  discovered from the floor, so the reverse curriculum moves to the very end
-  state and walks back); ``edge_spawn_prob`` (0.2) on the floor 0.04-0.08 m
-  from the front face; the rest on the floor 0.18-0.25 m away.  The airborne
-  fraction retires as the AIRBORNE-episode landed rate climbs (v10 thresholds
-  0.15/0.30/0.50 -> prob 0.4/0.2/0.0, 200-episode windows; the v9 0.3/0.5/0.7
-  table never fired under training-time noise), leaving pure floor spawns
-  once the landing is consolidated.  The platform top height IS the
-  twist command: ``vx`` is sampled in 0.025-0.035 m (inside the step-up
-  envelope) and the reset event places the mocap platform so its top sits at
-  that height.  Jump onto the platform and stand.
+  Spawn mix (v11): ``ballistic_spawn_prob`` (0.5 -> 0 by curriculum) — the
+  "just jumped" state: HOME pose, soles 1-2 cm off the ground 0.05-0.15 m
+  from the platform, with a SOLVED launch velocity (arc apex 5-15 cm above
+  the top, coming down on the platform centre).  v10 showed the crouch (v8)
+  and the landing (v9, 57.9 % deterministic) exist but the coordinated
+  takeoff is never discovered from the floor — so the nearly-done spawn
+  moves one step back from the end state (landing) to mid-flight.
+  ``airborne_spawn_prob`` (constant 0.2) keeps the drop-onto-platform
+  landing skill alive (v10's retiring it diluted the skill);
+  ``edge_spawn_prob`` (0.15) near-edge floor; the rest far floor.  The
+  ballistic fraction retires as the BALLISTIC-episode landed rate climbs
+  (thresholds 0.10/0.20/0.35 -> prob 0.3/0.15/0.0, 200-episode windows,
+  bidirectional).  The platform top height IS the twist command: ``vx`` is
+  sampled in 0.025-0.035 m and the reset event places the mocap platform so
+  its top sits at that height.  Jump onto the platform and stand.
 * Reward is episodic-style (AGENTS.md): potential-based trunk-height progress
   (paid on the DELTA of min(trunk_z, platform_top + 0.09), per-step capped —
   rising pays, holding pays zero, falling pays back, so it cannot be farmed),
@@ -96,30 +98,47 @@ PLATFORM_HEIGHT_RANGE = (0.025, 0.035)  # m, sampled as the twist vx command
 PLATFORM_DISTANCE_RANGE = (0.18, 0.25)  # m, robot root to the platform front face
 EDGE_DISTANCE_RANGE = (0.04, 0.08)  # m, edge-spawn root to the front face
 AIRBORNE_CLEARANCE_RANGE = (0.08, 0.15)  # m, sole clearance above the platform top
+# v11 ballistic ("just jumped") spawn anchors.  Apex margin A above the TOP:
+# the arc must clear the 25-35 mm top with landing margin.  Sole clearance c
+# and front-face distance d at spawn.  Launch velocities are SOLVED, not
+# sampled: vz = sqrt(2 g (h + A - c)) so the arc apex is exactly A above the
+# top; flight time t = vz/g + sqrt(2 A/g) (up to apex, then down to top
+# level); vx = (d + 0.02) / t so the trajectory comes down on the platform
+# centre minus the 10 mm standing offset.  Independent vx sampling would
+# systematically miss the platform.
+BALLISTIC_APEX_RANGE = (0.05, 0.15)  # m, arc apex above the platform top
+BALLISTIC_DISTANCE_RANGE = (0.05, 0.15)  # m, spawn root to the front face
+BALLISTIC_SOLE_CLEARANCE_RANGE = (0.01, 0.02)  # m, soles just off the ground
+GRAVITY = 9.81
 
 # Spawn types (per-episode, recorded at reset for spawn-typed rewards).
 SPAWN_FLOOR = 0  # far floor spawn (PLATFORM_DISTANCE_RANGE)
 SPAWN_EDGE = 1  # near-edge floor spawn (EDGE_DISTANCE_RANGE)
 SPAWN_PLATFORM = 2  # reverse-curriculum spawn on the platform top
 SPAWN_AIRBORNE = 3  # reverse-curriculum spawn dropping onto the platform top
+SPAWN_BALLISTIC = 4  # reverse-curriculum spawn mid-flight toward the platform
 
-# v9 airborne reverse curriculum: airborne fraction by AIRBORNE-episode landed
-# success rate (floor success is 0 early, so it cannot drive the schedule).
-# Highest satisfied rate threshold wins; counters reset on every stage change
-# (each stage is measured on a fresh window of AIRBORNE_CURRICULUM_MIN_EPISODES).
-# v10 thresholds: the v9 table (0.3/0.5/0.7) never fired — the deterministic
-# eval lands 57.9 % of airborne drops, but the TRAINING-time rate (sampled
-# actions, obs noise, DR) is several-fold lower and stayed under 0.3, pinning
-# the schedule at 0.6.  First rung 0.15 ≈ eval-rate/4 (a conservative
-# stochastic-policy floor — reachable once landings exist at all); second
-# rung 0.30 keeps the ladder spacing meaningful; retirement at 0.50 ≈ the
-# deterministic rate minus margin (reachable as training approaches eval
-# quality).  Bidirectional: a rate collapse re-introduces airborne spawns.
+# Airborne curriculum (v10 thresholds, superseded as the DRIVER by ballistic
+# in v11 — the function is kept for the stage-logic tests; airborne spawns
+# are now a CONSTANT 0.2 share so the landing skill is not diluted).
 AIRBORNE_CURRICULUM = (
     {"rate": 0.50, "prob": 0.0},
     {"rate": 0.30, "prob": 0.2},
     {"rate": 0.15, "prob": 0.4},
     {"rate": 0.0, "prob": 0.6},
+)
+# v11 ballistic curriculum: driver = BALLISTIC-episode landed rate.  First
+# rung 0.10 — more conservative than airborne's 0.15 because ballistic adds
+# flight management on top of the landing (the v10 airborne training curve
+# 0.0001 -> 0.48 over 2000 iters at 60% share says a harder skill starts
+# lower and climbs slower); retirement at 0.35 (below airborne's 0.50 — the
+# ballistic state is a means to the floor jump, so floor pressure should
+# dominate earlier).  Bidirectional, 200-episode windows.
+BALLISTIC_CURRICULUM = (
+    {"rate": 0.35, "prob": 0.0},
+    {"rate": 0.20, "prob": 0.15},
+    {"rate": 0.10, "prob": 0.3},
+    {"rate": 0.0, "prob": 0.5},
 )
 AIRBORNE_CURRICULUM_MIN_EPISODES = 200
 
@@ -130,9 +149,13 @@ FOOT_PROGRESS_GATE_M = 0.15  # foot z-progress pays only this near the platform 
 SUCCESS_FOOT_MARGIN_M = 0.005  # both feet above top - this
 SUCCESS_UPRIGHT_MIN = 0.9  # -projected_gravity_b z
 SUCCESS_HOLD_S = 0.4
-# Nearly-done spawns (platform-top AND airborne) collect 40 * this = 3 — the
-# v6 stand-still lesson applies to every goal-state spawn class.
+# Nearly-done spawns collect a fraction of the 40-weight success (v6 lesson:
+# goal-state spawns must not out-earn the real maneuver).  Platform-top and
+# airborne-above: 0.075 = 3 points (free states).  Ballistic: 0.15 = 6 —
+# farther from done than a free fall (the flight still has to be managed and
+# the landing stuck), so it earns more, but well below the floor-born 40.
 SUCCESS_PLATFORM_SPAWN_SCALE = 0.075
+SUCCESS_BALLISTIC_SPAWN_SCALE = 0.15
 FALLEN_GRAVITY_Z = -0.5  # fallen: projected_gravity_b z above this
 
 
@@ -181,12 +204,14 @@ class _JumpStepState:
         self.hold_steps = torch.zeros(n, dtype=torch.long, device=dev)
         self.hold_step = -1
         self.spawn_type = torch.zeros(n, dtype=torch.long, device=dev)  # SPAWN_*
-        # Airborne-curriculum accounting: per-episode flags plus global counters
-        # (window resets on every curriculum stage change).
+        # Airborne/ballistic-curriculum accounting: per-episode flags plus
+        # global counters (window resets on every curriculum stage change).
         self.episode_started = torch.zeros(n, dtype=torch.bool, device=dev)
         self.episode_landed = torch.zeros(n, dtype=torch.bool, device=dev)
         self.airborne_done = 0
         self.airborne_landed = 0
+        self.ballistic_done = 0
+        self.ballistic_landed = 0
 
 
 def _jump_step_state(env: ManagerBasedRlEnv) -> _JumpStepState:
@@ -211,21 +236,46 @@ def spawn_class_outcomes(spawn_type: torch.Tensor, landed: torch.Tensor) -> dict
         ("edge", SPAWN_EDGE),
         ("platform", SPAWN_PLATFORM),
         ("airborne", SPAWN_AIRBORNE),
+        ("ballistic", SPAWN_BALLISTIC),
     ):
         mask = spawn_type == cls
         out[name] = (int(mask.sum()), int((mask & landed.bool()).sum()))
     return out
 
 
-def _book_ended_episodes(state: _JumpStepState, env_ids: torch.Tensor) -> tuple[int, int]:
+def _book_ended_episodes(state: _JumpStepState, env_ids: torch.Tensor, spawn_cls: int) -> tuple[int, int]:
     """Count ended episodes (and landed ones) whose PREVIOUS spawn type was
-    airborne — the airborne-curriculum driver.  Must be called BEFORE the new
+    ``spawn_cls`` — the curriculum drivers.  Must be called BEFORE the new
     spawn-type draw overwrites ``state.spawn_type``; envs on their first
     episode (``episode_started`` False) are skipped."""
-    prev_air = state.episode_started[env_ids] & (state.spawn_type[env_ids] == SPAWN_AIRBORNE)
-    done = int(prev_air.sum())
-    landed = int((prev_air & state.episode_landed[env_ids]).sum())
+    prev = state.episode_started[env_ids] & (state.spawn_type[env_ids] == spawn_cls)
+    done = int(prev.sum())
+    landed = int((prev & state.episode_landed[env_ids]).sum())
     return done, landed
+
+
+def _ballistic_launch(
+    top_rel: torch.Tensor,
+    apex: torch.Tensor,
+    clearance: torch.Tensor,
+    distance: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Solve the (vx, vz) launch velocity for the ballistic spawn.
+
+    ``top_rel``: platform top above the ground (the twist command);
+    ``apex``: arc apex above the top; ``clearance``: sole height at spawn;
+    ``distance``: spawn root to the platform front face.  vz = sqrt(2 g
+    (top + apex - clearance)) puts the arc apex exactly ``apex`` above the
+    top; the flight time to come back down to top level is
+    t = vz/g + sqrt(2 apex/g); vx covers (distance + half depth - the 10 mm
+    standing offset) in that time so the robot comes down on the platform
+    centre.  All tensors (N,), returns ((N,), (N,)).
+    """
+    rise = (top_rel + apex - clearance).clamp_min(0.02)
+    vz = torch.sqrt(2.0 * GRAVITY * rise)
+    t_land = vz / GRAVITY + torch.sqrt(2.0 * apex / GRAVITY)
+    vx = (distance + 0.5 * PLATFORM_DEPTH_M - 0.010) / t_land
+    return vx, vz
 
 
 def _mocap_write(env: ManagerBasedRlEnv, state: _JumpStepState, env_ids: torch.Tensor) -> None:
@@ -246,33 +296,41 @@ def reset_jump_step(
     distance_range: tuple[float, float] = PLATFORM_DISTANCE_RANGE,
     edge_distance_range: tuple[float, float] = EDGE_DISTANCE_RANGE,
     airborne_clearance_range: tuple[float, float] = AIRBORNE_CLEARANCE_RANGE,
+    ballistic_apex_range: tuple[float, float] = BALLISTIC_APEX_RANGE,
+    ballistic_distance_range: tuple[float, float] = BALLISTIC_DISTANCE_RANGE,
     spawn_z: float = 0.122,
     position_noise: float = 0.005,
     yaw_noise_deg: float = 5.0,
     tilt_noise_deg: float = 2.0,
     joint_noise: float = 0.03,
     platform_spawn_prob: float = 0.0,
-    edge_spawn_prob: float = 0.2,
-    airborne_spawn_prob: float = 0.6,
+    edge_spawn_prob: float = 0.15,
+    airborne_spawn_prob: float = 0.2,
+    ballistic_spawn_prob: float = 0.5,
 ) -> None:
-    """Spawn the robot and place the platform.  Four spawn types (v9 mix):
+    """Spawn the robot and place the platform.  Spawn types (v11 mix):
 
-    * ``airborne_spawn_prob`` (curriculum-driven, 0.6 -> 0): HOME pose in mid-
-      air directly above the platform centre, soles ``airborne_clearance_range``
-      above the top, zero initial velocity — the nearly-done spawn: the robot
-      experiences "fall onto the platform and stick the landing" in bulk
-      before it can jump.  xy jitter is anisotropic: ±5 mm in x (the sole
-      spans -17/+31 mm of the ankle site on a 60 mm deep top — the ±3 cm
-      nominal jitter would drop toes past the front edge), ±30 mm in y (the
-      230 mm width has ample room).
-    * ``platform_spawn_prob`` (0 in v9 — superseded by airborne): standing on
-      the platform top, root 10 mm behind the centre (sole fully on).
+    * ``ballistic_spawn_prob`` (curriculum-driven, 0.5 -> 0): the "just
+      jumped" state — HOME pose, upright, soles 1-2 cm off the ground
+      ``ballistic_distance_range`` in front of the platform, with a SOLVED
+      launch velocity (``_ballistic_launch``): vz puts the arc apex 5-15 cm
+      above the platform top, vx brings the robot down on the platform
+      centre.  Bulk experience of the flight + landing the floor spawns
+      never discovered (the v4-v10 gap: the crouch exists, the landing
+      exists, the coordinated takeoff does not).
+    * ``airborne_spawn_prob`` (constant 0.2 in v11): HOME pose in mid-air
+      above the platform centre, soles ``airborne_clearance_range`` above
+      the top, zero velocity — keeps the landing skill alive (v10 showed
+      retiring it dilutes the skill).  xy jitter anisotropic: ±5 mm in x
+      (the sole spans -17/+31 mm of the ankle site on a 60 mm deep top),
+      ±30 mm in y.
+    * ``platform_spawn_prob`` (0 — superseded): standing on the platform top.
     * ``edge_spawn_prob``: on the floor only ``edge_distance_range`` from the
       platform's front face (takeoff-proximate, feet inside the foot gate).
     * the rest: on the floor ``distance_range`` ahead of the front face.
 
     Every spawn records its type in ``state.spawn_type`` (SPAWN_*) and closes
-    the accounting of the ENDED episode (airborne-curriculum counters).
+    the accounting of the ENDED episode (curriculum counters).
 
     The platform top follows the twist ``vx`` command.  Commands resample AFTER
     reset events (see module docstring), so the read here can be one episode
@@ -289,26 +347,36 @@ def reset_jump_step(
     asset: Entity = env.scene[asset_cfg.name]
     origins = env.scene.env_origins[env_ids]
 
-    # Close the ended episodes' books for the airborne curriculum (the first
-    # reset after startup has no previous episode).
-    done_eps, landed_eps = _book_ended_episodes(state, env_ids)
+    # Close the ended episodes' books for the curricula (the first reset
+    # after startup has no previous episode).
+    done_eps, landed_eps = _book_ended_episodes(state, env_ids, SPAWN_AIRBORNE)
     state.airborne_done += done_eps
     state.airborne_landed += landed_eps
+    done_eps, landed_eps = _book_ended_episodes(state, env_ids, SPAWN_BALLISTIC)
+    state.ballistic_done += done_eps
+    state.ballistic_landed += landed_eps
 
-    # Spawn-type draw (edge spawns change where the platform goes, so first).
+    # Spawn-type draw (edge/ballistic spawns change where the platform goes).
     u = torch.rand(n, device=dev)
-    on_airborne = u < airborne_spawn_prob
-    on_platform = (u >= airborne_spawn_prob) & (u < airborne_spawn_prob + platform_spawn_prob)
-    on_edge = (u >= airborne_spawn_prob + platform_spawn_prob) & (
-        u < airborne_spawn_prob + platform_spawn_prob + edge_spawn_prob
+    on_ballistic = u < ballistic_spawn_prob
+    on_airborne = (u >= ballistic_spawn_prob) & (u < ballistic_spawn_prob + airborne_spawn_prob)
+    on_platform = (u >= ballistic_spawn_prob + airborne_spawn_prob) & (
+        u < ballistic_spawn_prob + airborne_spawn_prob + platform_spawn_prob
+    )
+    on_edge = (u >= ballistic_spawn_prob + airborne_spawn_prob + platform_spawn_prob) & (
+        u < ballistic_spawn_prob + airborne_spawn_prob + platform_spawn_prob + edge_spawn_prob
     )
     state.spawn_type[env_ids] = torch.where(
-        on_airborne,
-        torch.full_like(u, SPAWN_AIRBORNE, dtype=torch.long),
+        on_ballistic,
+        torch.full_like(u, SPAWN_BALLISTIC, dtype=torch.long),
         torch.where(
-            on_platform,
-            torch.full_like(u, SPAWN_PLATFORM, dtype=torch.long),
-            torch.where(on_edge, torch.full_like(u, SPAWN_EDGE, dtype=torch.long), torch.full_like(u, SPAWN_FLOOR, dtype=torch.long)),
+            on_airborne,
+            torch.full_like(u, SPAWN_AIRBORNE, dtype=torch.long),
+            torch.where(
+                on_platform,
+                torch.full_like(u, SPAWN_PLATFORM, dtype=torch.long),
+                torch.where(on_edge, torch.full_like(u, SPAWN_EDGE, dtype=torch.long), torch.full_like(u, SPAWN_FLOOR, dtype=torch.long)),
+            ),
         ),
     )
 
@@ -318,7 +386,10 @@ def reset_jump_step(
     height = command[env_ids].clamp(*PLATFORM_HEIGHT_RANGE)
     far = distance_range[0] + torch.rand(n, device=dev) * (distance_range[1] - distance_range[0])
     near = edge_distance_range[0] + torch.rand(n, device=dev) * (edge_distance_range[1] - edge_distance_range[0])
-    distance = torch.where(on_edge, near, far)
+    bal_dist = ballistic_distance_range[0] + torch.rand(n, device=dev) * (
+        ballistic_distance_range[1] - ballistic_distance_range[0]
+    )
+    distance = torch.where(on_edge, near, torch.where(on_ballistic, bal_dist, far))
     state.center_xy[env_ids, 0] = origins[:, 0] + distance + 0.5 * PLATFORM_DEPTH_M
     state.center_xy[env_ids, 1] = origins[:, 1]
     state.top[env_ids] = origins[:, 2] + height
@@ -327,7 +398,8 @@ def reset_jump_step(
 
     # Robot root: HOME stance, yaw ~0 (facing +x), small noise.  Floor spawns
     # stand at the env origin; platform spawns stand on the top; airborne
-    # spawns drop onto it from ``clearance`` above.
+    # spawns drop onto it from ``clearance`` above; ballistic spawns launch
+    # from just off the ground with a solved velocity.
     xy_noise = (torch.rand(n, 2, device=dev) * 2.0 - 1.0) * position_noise
     # Tighter jitter on the platform so both soles stay inside the 60 mm depth.
     plat_noise = (torch.rand(n, 2, device=dev) * 2.0 - 1.0) * 0.002
@@ -358,13 +430,24 @@ def reset_jump_step(
     # sole clearance), so root z = top + 0.120 + clearance puts the soles
     # ``clearance`` above the top.
     root_z = torch.where(on_airborne, state.top[env_ids] + 0.120 + clearance, root_z)
+    # Ballistic: soles just off the ground, launch velocity solved from the
+    # sampled apex margin / distance (see _ballistic_launch).
+    bal_apex = ballistic_apex_range[0] + torch.rand(n, device=dev) * (ballistic_apex_range[1] - ballistic_apex_range[0])
+    bal_c = BALLISTIC_SOLE_CLEARANCE_RANGE[0] + torch.rand(n, device=dev) * (
+        BALLISTIC_SOLE_CLEARANCE_RANGE[1] - BALLISTIC_SOLE_CLEARANCE_RANGE[0]
+    )
+    bal_vx, bal_vz = _ballistic_launch(height, bal_apex, bal_c, bal_dist)
+    root_z = torch.where(on_ballistic, origins[:, 2] + 0.120 + bal_c, root_z)
     root_pos = torch.stack((root_x, root_y, root_z), dim=-1)
     yaw = (torch.rand(n, device=dev) * 2.0 - 1.0) * math.radians(yaw_noise_deg)
     pitch = (torch.rand(n, device=dev) * 2.0 - 1.0) * math.radians(tilt_noise_deg)
     roll = (torch.rand(n, device=dev) * 2.0 - 1.0) * math.radians(0.5 * tilt_noise_deg)
     quat = microduck_mdp._quat_from_yaw_pitch_roll(yaw, pitch, roll)
     asset.write_root_link_pose_to_sim(torch.cat((root_pos, quat), dim=-1), env_ids=env_ids)
-    asset.write_root_link_velocity_to_sim(torch.zeros(n, 6, device=dev), env_ids=env_ids)
+    root_vel = torch.zeros(n, 6, device=dev)
+    root_vel[:, 0] = torch.where(on_ballistic, bal_vx, root_vel[:, 0])
+    root_vel[:, 2] = torch.where(on_ballistic, bal_vz, root_vel[:, 2])
+    asset.write_root_link_velocity_to_sim(root_vel, env_ids=env_ids)
 
     # Joints: HOME + noise, clamped off the hard limits (same pattern as the ladder spawn).
     joint_pos = asset.data.default_joint_pos[env_ids].clone()
@@ -573,21 +656,25 @@ def jump_step_success(
     foot_margin: float = SUCCESS_FOOT_MARGIN_M,
     upright_min: float = SUCCESS_UPRIGHT_MIN,
     platform_spawn_scale: float = SUCCESS_PLATFORM_SPAWN_SCALE,
+    ballistic_spawn_scale: float = SUCCESS_BALLISTIC_SPAWN_SCALE,
 ) -> torch.Tensor:
     """One-shot (per episode) bonus for landing on the platform, upright.
     Rate-limited by construction (latched), so it is not a jackpot.
 
-    Spawn-typed (v6, extended v9): floor-born episodes (far or edge) pay in
-    full; nearly-done spawns (platform-top AND airborne) pay
-    ``platform_spawn_scale`` of it (kept at an absolute 3 across weight
-    changes).  v5 paid full price for stand-still-on-spawn success and the
-    policy stopped approaching the platform entirely — goal-state spawn
-    experience is kept, but it must not out-earn the real maneuver."""
+    Spawn-typed (v6, extended v9/v11): floor-born episodes (far or edge) pay
+    in full; nearly-done spawns pay a fraction (kept at absolute 3 points for
+    platform-top/airborne via ``platform_spawn_scale``; ballistic pays
+    ``ballistic_spawn_scale`` = 6 — farther from done than a free fall, the
+    flight still has to be managed).  v5 paid full price for stand-still-
+    on-spawn success and the policy stopped approaching the platform
+    entirely — goal-state spawn experience is kept, but it must not out-earn
+    the real maneuver."""
     state = _jump_step_state(env)
     condition = _success_condition(env, asset_cfg, sensor_name, foot_margin, upright_min)
     pay = (condition & ~state.success_latched).float()
     goal_spawn = (state.spawn_type == SPAWN_PLATFORM) | (state.spawn_type == SPAWN_AIRBORNE)
     scale = torch.where(goal_spawn, torch.full_like(pay, platform_spawn_scale), torch.ones_like(pay))
+    scale = torch.where(state.spawn_type == SPAWN_BALLISTIC, torch.full_like(pay, ballistic_spawn_scale), scale)
     state.success_latched |= condition
     return pay * scale
 
@@ -643,40 +730,74 @@ def jump_step_fallen(
 # --- curriculum -------------------------------------------------------------------
 
 
+def _spawn_rate_curriculum(
+    env: ManagerBasedRlEnv,
+    event_name: str,
+    param_name: str,
+    table: tuple[dict, ...],
+    done: int,
+    landed: int,
+    min_episodes: int,
+    label: str,
+) -> tuple[float, bool]:
+    """Rate-driven spawn-fraction schedule (shared by the airborne/ballistic
+    curricula).  Highest satisfied rate threshold wins; rewrites the reset
+    event's param through the live event manager (never ``env.cfg``).
+    Returns (active fraction, changed?)."""
+    term_cfg = env.event_manager.get_term_cfg(event_name)
+    current = float(term_cfg.params.get(param_name, 0.0))
+    if done < min_episodes:
+        return current, False
+    rate = landed / done
+    prob = current
+    for stage in table:  # descending rate thresholds
+        if rate >= stage["rate"]:
+            prob = stage["prob"]
+            break
+    if prob != current:
+        term_cfg.params[param_name] = prob
+        print(f"[jump_step] {label} curriculum: landed rate {rate:.3f} over {done} episodes -> prob {prob}")
+        return prob, True
+    return prob, False
+
+
 def jump_step_airborne_curriculum(
     env: ManagerBasedRlEnv,
     env_ids: torch.Tensor | None = None,
     event_name: str = "reset_jump_step",
     min_episodes: int = AIRBORNE_CURRICULUM_MIN_EPISODES,
-) -> float | None:
-    """Retire the airborne reverse-curriculum spawns as the landing is learned.
-
-    Driver: landed-success rate of AIRBORNE episodes only (floor-born success
-    is 0 for most of training and would pin the schedule at the start).
-    Every ``min_episodes`` completed airborne episodes the rate is evaluated
-    against AIRBORNE_CURRICULUM (highest satisfied threshold wins) and the
-    reset event's ``airborne_spawn_prob`` is rewritten through the live event
-    manager (never ``env.cfg`` — managers deepcopy at init).  The measurement
-    window resets on every stage change; the schedule is bidirectional, so a
-    rate collapse re-introduces airborne spawns.  Returns the active
-    ``airborne_spawn_prob``.
-    """
+) -> float:
+    """Airborne-fraction schedule (v10 thresholds).  Unregistered since v11
+    (airborne spawns are a constant share now); kept for the stage tests."""
     state = _jump_step_state(env)
-    term_cfg = env.event_manager.get_term_cfg(event_name)
-    current = float(term_cfg.params.get("airborne_spawn_prob", 0.0))
-    if state.airborne_done < min_episodes:
-        return current
-    rate = state.airborne_landed / state.airborne_done
-    prob = current
-    for stage in AIRBORNE_CURRICULUM:  # descending rate thresholds
-        if rate >= stage["rate"]:
-            prob = stage["prob"]
-            break
-    if prob != current:
-        term_cfg.params["airborne_spawn_prob"] = prob
-        print(f"[jump_step] airborne curriculum: landed rate {rate:.3f} over {state.airborne_done} airborne episodes -> prob {prob}")
+    prob, changed = _spawn_rate_curriculum(
+        env, event_name, "airborne_spawn_prob", AIRBORNE_CURRICULUM,
+        state.airborne_done, state.airborne_landed, min_episodes, "airborne",
+    )
+    if changed:
         state.airborne_done = 0
         state.airborne_landed = 0
+    return prob
+
+
+def jump_step_ballistic_curriculum(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor | None = None,
+    event_name: str = "reset_jump_step",
+    min_episodes: int = AIRBORNE_CURRICULUM_MIN_EPISODES,
+) -> float:
+    """Retire the ballistic ("just jumped") spawns as the flight+landing is
+    learned.  Driver: landed-success rate of BALLISTIC episodes only
+    (floor-born success is 0 for most of training).  200-episode windows,
+    bidirectional — see BALLISTIC_CURRICULUM for the threshold rationale."""
+    state = _jump_step_state(env)
+    prob, changed = _spawn_rate_curriculum(
+        env, event_name, "ballistic_spawn_prob", BALLISTIC_CURRICULUM,
+        state.ballistic_done, state.ballistic_landed, min_episodes, "ballistic",
+    )
+    if changed:
+        state.ballistic_done = 0
+        state.ballistic_landed = 0
     return prob
 
 
@@ -688,6 +809,15 @@ def jump_step_airborne_rate(env: ManagerBasedRlEnv, env_ids: torch.Tensor | None
     if state.airborne_done == 0:
         return 0.0
     return state.airborne_landed / state.airborne_done
+
+
+def jump_step_ballistic_rate(env: ManagerBasedRlEnv, env_ids: torch.Tensor | None = None) -> float:
+    """Reporter-only curriculum term: the current ballistic-episode landed
+    rate of the ACTIVE measurement window (Curriculum/ballistic_rate)."""
+    state = _jump_step_state(env)
+    if state.ballistic_done == 0:
+        return 0.0
+    return state.ballistic_landed / state.ballistic_done
 
 
 # --- env cfg ----------------------------------------------------------------------
@@ -836,8 +966,9 @@ def make_microduck_jump_step_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg
             # eval success rate measures the actual behavior, not free states
             # (the eval script opts airborne spawns back in via its own flag).
             "platform_spawn_prob": 0.0,
-            "edge_spawn_prob": 0.0 if play else 0.2,
-            "airborne_spawn_prob": 0.0 if play else 0.6,
+            "edge_spawn_prob": 0.0 if play else 0.15,
+            "airborne_spawn_prob": 0.0 if play else 0.2,
+            "ballistic_spawn_prob": 0.0 if play else 0.5,
         },
     )
     # Run the spawn before every other reset event.
@@ -878,15 +1009,17 @@ def make_microduck_jump_step_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg
         },
     )
     if not play:
-        # v9: retire the airborne (drop-onto-platform) spawns as the landing
-        # success rate climbs (0.6 -> 0.4 -> 0.2 -> 0).
-        cfg.curriculum["airborne_spawn"] = CurriculumTermCfg(
-            func=jump_step_airborne_curriculum,
+        # v11: retire the ballistic ("just jumped") spawns as the
+        # flight+landing success rate climbs (0.5 -> 0.3 -> 0.15 -> 0).
+        cfg.curriculum["ballistic_spawn"] = CurriculumTermCfg(
+            func=jump_step_ballistic_curriculum,
             params={"event_name": "reset_jump_step"},
         )
-        # Reporter: the windowed airborne landed rate itself (diagnostics —
-        # distinguishes "accounting broken" from "rate below threshold").
+        # Reporters: the windowed landed rates themselves (diagnostics —
+        # distinguishes "accounting broken" from "rate below threshold";
+        # airborne_rate also tracks landing-skill retention, the v10 lesson).
         cfg.curriculum["airborne_rate"] = CurriculumTermCfg(func=jump_step_airborne_rate)
+        cfg.curriculum["ballistic_rate"] = CurriculumTermCfg(func=jump_step_ballistic_rate)
     return cfg
 
 

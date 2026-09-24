@@ -39,6 +39,8 @@ p.add_argument("--render", action="store_true")
 p.add_argument("--azimuth", type=float, default=45.0)
 p.add_argument("--airborne-frac", type=float, default=0.0,
                help="fraction of airborne (drop-onto-platform) spawns; >0 reports per-spawn-class success")
+p.add_argument("--ballistic-frac", type=float, default=0.0,
+               help="fraction of ballistic (just-jumped) spawns; >0 reports per-spawn-class success")
 a = p.parse_args()
 out = Path(a.out)
 out.mkdir(parents=True, exist_ok=True)
@@ -51,6 +53,8 @@ if not a.render:
     cfg.commands["twist"].ranges.lin_vel_x = (0.025, 0.035)
 if a.airborne_frac > 0.0 and not a.render:
     cfg.events["reset_jump_step"].params["airborne_spawn_prob"] = a.airborne_frac
+if a.ballistic_frac > 0.0 and not a.render:
+    cfg.events["reset_jump_step"].params["ballistic_spawn_prob"] = a.ballistic_frac
 
 if a.render:
     configure_video_cfg(cfg)
@@ -77,7 +81,7 @@ raw.reset(seed=a.seed)
 obs = env.get_observations()
 assert obs["actor"].shape[-1] == 61
 
-bucketed = a.airborne_frac > 0.0 and not a.render
+bucketed = (a.airborne_frac > 0.0 or a.ballistic_frac > 0.0) and not a.render
 heights = None if (a.render or bucketed) else raw.command_manager.get_command("twist")[:, 0].cpu().clone()
 landed_envs = torch.zeros(env.num_envs, dtype=torch.bool, device=raw.device)
 if bucketed:
@@ -86,7 +90,7 @@ if bucketed:
     # Semantic labels, NOT positional bincount indices — a swapped index here
     # reported airborne landings as "floor" in the v9 eval (2026-09-24).
     cur_type = raw._jump_step_state.spawn_type.clone()
-    ep = {"airborne": [0, 0], "floor": [0, 0]}  # [episodes, landed]
+    ep = {"airborne": [0, 0], "ballistic": [0, 0], "floor": [0, 0]}  # [episodes, landed]
 for step in range(steps):
     with torch.inference_mode():
         act = policy(obs)
@@ -98,8 +102,9 @@ for step in range(steps):
         fin = done.nonzero(as_tuple=False).squeeze(-1)
         if len(fin):
             outcomes = spawn_class_outcomes(cur_type[fin], term[fin])
-            ep["airborne"][0] += outcomes["airborne"][0]
-            ep["airborne"][1] += outcomes["airborne"][1]
+            for key in ("airborne", "ballistic"):
+                ep[key][0] += outcomes[key][0]
+                ep[key][1] += outcomes[key][1]
             for cls in ("floor", "edge", "platform"):
                 ep["floor"][0] += outcomes[cls][0]
                 ep["floor"][1] += outcomes[cls][1]
@@ -112,6 +117,7 @@ elif bucketed:
     # Unfinished episodes count as attempts (a landed episode terminates).
     outcomes = spawn_class_outcomes(cur_type, torch.zeros_like(cur_type, dtype=torch.bool))
     ep["airborne"][0] += outcomes["airborne"][0]
+    ep["ballistic"][0] += outcomes["ballistic"][0]
     for cls in ("floor", "edge", "platform"):
         ep["floor"][0] += outcomes[cls][0]
     report = {
@@ -119,8 +125,11 @@ elif bucketed:
         "seconds": a.seconds,
         "seed": a.seed,
         "airborne_frac": a.airborne_frac,
+        "ballistic_frac": a.ballistic_frac,
         "airborne": {"episodes": ep["airborne"][0], "success": ep["airborne"][1],
                      "fraction": round(ep["airborne"][1] / max(ep["airborne"][0], 1), 4)},
+        "ballistic": {"episodes": ep["ballistic"][0], "success": ep["ballistic"][1],
+                      "fraction": round(ep["ballistic"][1] / max(ep["ballistic"][0], 1), 4)},
         "floor": {"episodes": ep["floor"][0], "success": ep["floor"][1],
                   "fraction": round(ep["floor"][1] / max(ep["floor"][0], 1), 4)},
     }
