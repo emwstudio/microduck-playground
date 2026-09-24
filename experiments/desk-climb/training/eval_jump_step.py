@@ -24,6 +24,7 @@ from mjlab_microduck.tasks import MicroduckOnPolicyRunner, mdp
 from mjlab_microduck.tasks.microduck_jump_step_env_cfg import (
     MicroduckJumpStepRlCfg,
     make_microduck_jump_step_env_cfg,
+    spawn_class_outcomes,
     SPAWN_AIRBORNE,
 )
 from mjlab_microduck.video_effects import configure_video_cfg, fix_render_shadows
@@ -82,9 +83,10 @@ landed_envs = torch.zeros(env.num_envs, dtype=torch.bool, device=raw.device)
 if bucketed:
     # Per-episode accounting by spawn class: an episode that ends is booked
     # under its own spawn type (auto-reset has already drawn the next one).
+    # Semantic labels, NOT positional bincount indices — a swapped index here
+    # reported airborne landings as "floor" in the v9 eval (2026-09-24).
     cur_type = raw._jump_step_state.spawn_type.clone()
-    ep_total = torch.zeros(2, dtype=torch.long)  # [airborne, floor]
-    ep_landed = torch.zeros(2, dtype=torch.long)
+    ep = {"airborne": [0, 0], "floor": [0, 0]}  # [episodes, landed]
 for step in range(steps):
     with torch.inference_mode():
         act = policy(obs)
@@ -95,9 +97,12 @@ for step in range(steps):
     if bucketed:
         fin = done.nonzero(as_tuple=False).squeeze(-1)
         if len(fin):
-            b = (cur_type[fin] == SPAWN_AIRBORNE).long().cpu()
-            ep_total += torch.bincount(b, minlength=2)
-            ep_landed += torch.bincount(b[term[fin].cpu()], minlength=2)
+            outcomes = spawn_class_outcomes(cur_type[fin], term[fin])
+            ep["airborne"][0] += outcomes["airborne"][0]
+            ep["airborne"][1] += outcomes["airborne"][1]
+            for cls in ("floor", "edge", "platform"):
+                ep["floor"][0] += outcomes[cls][0]
+                ep["floor"][1] += outcomes[cls][1]
             cur_type[fin] = raw._jump_step_state.spawn_type[fin]
     assert torch.isfinite(act).all()
 
@@ -105,17 +110,19 @@ if a.render:
     print(f"[render] done -> {out}")
 elif bucketed:
     # Unfinished episodes count as attempts (a landed episode terminates).
-    b = (cur_type == SPAWN_AIRBORNE).long().cpu()
-    ep_total += torch.bincount(b, minlength=2)
+    outcomes = spawn_class_outcomes(cur_type, torch.zeros_like(cur_type, dtype=torch.bool))
+    ep["airborne"][0] += outcomes["airborne"][0]
+    for cls in ("floor", "edge", "platform"):
+        ep["floor"][0] += outcomes[cls][0]
     report = {
         "envs": env.num_envs,
         "seconds": a.seconds,
         "seed": a.seed,
         "airborne_frac": a.airborne_frac,
-        "airborne": {"episodes": int(ep_total[0]), "success": int(ep_landed[0]),
-                     "fraction": round(float(ep_landed[0] / max(ep_total[0], 1)), 4)},
-        "floor": {"episodes": int(ep_total[1]), "success": int(ep_landed[1]),
-                  "fraction": round(float(ep_landed[1] / max(ep_total[1], 1)), 4)},
+        "airborne": {"episodes": ep["airborne"][0], "success": ep["airborne"][1],
+                     "fraction": round(ep["airborne"][1] / max(ep["airborne"][0], 1), 4)},
+        "floor": {"episodes": ep["floor"][0], "success": ep["floor"][1],
+                  "fraction": round(ep["floor"][1] / max(ep["floor"][0], 1), 4)},
     }
     (out / "eval.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))

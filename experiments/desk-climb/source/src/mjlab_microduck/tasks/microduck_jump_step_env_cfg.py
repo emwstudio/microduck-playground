@@ -188,6 +188,37 @@ def _jump_step_state(env: ManagerBasedRlEnv) -> _JumpStepState:
     return state
 
 
+def spawn_class_outcomes(spawn_type: torch.Tensor, landed: torch.Tensor) -> dict[str, tuple[int, int]]:
+    """Per-spawn-class episode accounting: ``{class_name: (episodes, landed)}``.
+
+    Labels live NEXT to their masks on purpose — a positional bincount index
+    (``bincount((type == AIRBORNE).long())``) silently swapped the airborne
+    and floor buckets in the 2026-09-24 v9 eval.  Used by the eval script and
+    unit-tested against known distributions.
+    """
+    out: dict[str, tuple[int, int]] = {}
+    for name, cls in (
+        ("floor", SPAWN_FLOOR),
+        ("edge", SPAWN_EDGE),
+        ("platform", SPAWN_PLATFORM),
+        ("airborne", SPAWN_AIRBORNE),
+    ):
+        mask = spawn_type == cls
+        out[name] = (int(mask.sum()), int((mask & landed.bool()).sum()))
+    return out
+
+
+def _book_ended_episodes(state: _JumpStepState, env_ids: torch.Tensor) -> tuple[int, int]:
+    """Count ended episodes (and landed ones) whose PREVIOUS spawn type was
+    airborne — the airborne-curriculum driver.  Must be called BEFORE the new
+    spawn-type draw overwrites ``state.spawn_type``; envs on their first
+    episode (``episode_started`` False) are skipped."""
+    prev_air = state.episode_started[env_ids] & (state.spawn_type[env_ids] == SPAWN_AIRBORNE)
+    done = int(prev_air.sum())
+    landed = int((prev_air & state.episode_landed[env_ids]).sum())
+    return done, landed
+
+
 def _mocap_write(env: ManagerBasedRlEnv, state: _JumpStepState, env_ids: torch.Tensor) -> None:
     z = state.top[env_ids] - PLATFORM_HALF_THICKNESS_M
     pos = torch.stack((state.center_xy[env_ids, 0], state.center_xy[env_ids, 1], z), dim=-1)
@@ -251,10 +282,9 @@ def reset_jump_step(
 
     # Close the ended episodes' books for the airborne curriculum (the first
     # reset after startup has no previous episode).
-    prev_air = state.episode_started[env_ids] & (state.spawn_type[env_ids] == SPAWN_AIRBORNE)
-    if bool(prev_air.any()):
-        state.airborne_done += int(prev_air.sum())
-        state.airborne_landed += int((prev_air & state.episode_landed[env_ids]).sum())
+    done_eps, landed_eps = _book_ended_episodes(state, env_ids)
+    state.airborne_done += done_eps
+    state.airborne_landed += landed_eps
 
     # Spawn-type draw (edge spawns change where the platform goes, so first).
     u = torch.rand(n, device=dev)
@@ -635,9 +665,20 @@ def jump_step_airborne_curriculum(
             break
     if prob != current:
         term_cfg.params["airborne_spawn_prob"] = prob
+        print(f"[jump_step] airborne curriculum: landed rate {rate:.3f} over {state.airborne_done} airborne episodes -> prob {prob}")
         state.airborne_done = 0
         state.airborne_landed = 0
     return prob
+
+
+def jump_step_airborne_rate(env: ManagerBasedRlEnv, env_ids: torch.Tensor | None = None) -> float:
+    """Reporter-only curriculum term: the current airborne-episode landed
+    rate of the ACTIVE measurement window (logged as Curriculum/airborne_rate
+    so the driver signal itself is observable, not just the stage output)."""
+    state = _jump_step_state(env)
+    if state.airborne_done == 0:
+        return 0.0
+    return state.airborne_landed / state.airborne_done
 
 
 # --- env cfg ----------------------------------------------------------------------
@@ -834,6 +875,9 @@ def make_microduck_jump_step_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg
             func=jump_step_airborne_curriculum,
             params={"event_name": "reset_jump_step"},
         )
+        # Reporter: the windowed airborne landed rate itself (diagnostics —
+        # distinguishes "accounting broken" from "rate below threshold").
+        cfg.curriculum["airborne_rate"] = CurriculumTermCfg(func=jump_step_airborne_rate)
     return cfg
 
 

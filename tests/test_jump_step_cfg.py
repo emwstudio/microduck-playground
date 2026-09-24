@@ -143,3 +143,72 @@ def test_airborne_curriculum_bidirectional_and_window():
     assert _run_curriculum(env, done=250, landed=20) == 0.6
     state = js._jump_step_state(env)
     assert state.airborne_done == 250  # not reset — same stage
+
+
+# --- spawn-class accounting (the 2026-09-24 label-swap regression) ----------------
+
+
+def test_spawn_class_outcomes_no_cross_talk():
+    import torch
+
+    spawn_type = torch.tensor([
+        js.SPAWN_FLOOR, js.SPAWN_FLOOR, js.SPAWN_EDGE,
+        js.SPAWN_PLATFORM, js.SPAWN_AIRBORNE, js.SPAWN_AIRBORNE, js.SPAWN_AIRBORNE,
+    ])
+    landed = torch.tensor([False, True, True, False, True, False, True])
+    out = js.spawn_class_outcomes(spawn_type, landed)
+    assert out["floor"] == (2, 1)
+    assert out["edge"] == (1, 1)
+    assert out["platform"] == (1, 0)
+    assert out["airborne"] == (3, 2)
+    # Every episode is accounted exactly once.
+    assert sum(v[0] for v in out.values()) == len(spawn_type)
+    assert sum(v[1] for v in out.values()) == int(landed.sum())
+
+
+def test_book_ended_episodes_counts_only_previous_airborne():
+    import torch
+    from types import SimpleNamespace
+
+    # 6 envs: two airborne (one landed), one floor (landed!), one edge,
+    # one platform, one airborne on its FIRST episode (must be skipped).
+    state = SimpleNamespace(
+        episode_started=torch.tensor([True, True, True, True, True, False]),
+        spawn_type=torch.tensor([
+            js.SPAWN_AIRBORNE, js.SPAWN_AIRBORNE, js.SPAWN_FLOOR,
+            js.SPAWN_EDGE, js.SPAWN_PLATFORM, js.SPAWN_AIRBORNE,
+        ]),
+        episode_landed=torch.tensor([True, False, True, False, False, True]),
+    )
+    env_ids = torch.arange(6)
+    done, landed = js._book_ended_episodes(state, env_ids)
+    # Only env 0 counts as a landed airborne episode; the floor-born landing
+    # (env 2) must NOT leak into the airborne driver, and the first-episode
+    # env 5 is skipped entirely.
+    assert (done, landed) == (2, 1)
+
+
+def test_book_ended_episodes_empty_when_no_airborne():
+    import torch
+    from types import SimpleNamespace
+
+    state = SimpleNamespace(
+        episode_started=torch.ones(3, dtype=torch.bool),
+        spawn_type=torch.tensor([js.SPAWN_FLOOR, js.SPAWN_EDGE, js.SPAWN_PLATFORM]),
+        episode_landed=torch.ones(3, dtype=torch.bool),
+    )
+    done, landed = js._book_ended_episodes(state, torch.arange(3))
+    assert (done, landed) == (0, 0)
+
+
+def test_airborne_rate_reporter():
+    env = _StubEnv(0.6)
+    state = js._jump_step_state(env)
+    assert js.jump_step_airborne_rate(env) == 0.0  # empty window
+    state.airborne_done = 10
+    state.airborne_landed = 4
+    assert js.jump_step_airborne_rate(env) == 0.4
+    train = js.make_microduck_jump_step_env_cfg(play=False)
+    assert "airborne_rate" in train.curriculum
+    play = js.make_microduck_jump_step_env_cfg(play=True)
+    assert "airborne_rate" not in play.curriculum
