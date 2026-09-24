@@ -138,3 +138,89 @@ def test_v13_stall_penalty_and_overshoot_clearance():
     ladder_cfg = ladder_mod.make_microduck_ladder_env_cfg()
     assert "tread_stall" not in ladder_cfg.rewards
     assert ladder_cfg.rewards["swing_overshoot"].params["clearance"] == 0.025
+
+
+def _patch_snapshot_mdp():
+    from mjlab_microduck.tasks import microduck_ladder_env_cfg as ladder_mod
+
+    snap_mdp = _load_snapshot_mdp()
+    ladder_mod.microduck_mdp = snap_mdp
+    ss.microduck_mdp = snap_mdp
+    return snap_mdp
+
+
+def test_v15_top_approach_spawn_wiring():
+    _patch_snapshot_mdp()
+    train = ss.make_microduck_simple_stairs_env_cfg(play=False)
+    assert train.events["reset_stair_ladder"].params["top_approach_prob"] == 0.35
+    assert "top_approach_spawn" in train.curriculum
+    stages = train.curriculum["top_approach_spawn"].params["param_stages"]
+    assert [s["params"]["top_approach_prob"] for s in stages] == [0.35, 0.15]
+    assert stages[1]["step"] == 1000 * 24
+    play = ss.make_microduck_simple_stairs_env_cfg(play=True)
+    assert play.events["reset_stair_ladder"].params["top_approach_prob"] == 0.0
+    assert "top_approach_spawn" not in play.curriculum
+    # ladder family zero-change: no near-top spawn anywhere else.
+    from mjlab_microduck.tasks import microduck_ladder_env_cfg as ladder_mod
+
+    ladder_cfg = ladder_mod.make_microduck_ladder_env_cfg()
+    assert ladder_cfg.events["reset_stair_ladder"].params["top_approach_prob"] == 0.0
+
+
+def test_v15_start_level_seed(monkeypatch):
+    _patch_snapshot_mdp()
+    # Default: no seed event (from-scratch behaviour unchanged).
+    cfg = ss.make_microduck_simple_stairs_env_cfg()
+    assert "seed_start_level" not in cfg.events
+    # Warm start: MICRODUCK_SIMPLE_STAIRS_START_LEVEL=3 seeds the first reset.
+    monkeypatch.setenv("MICRODUCK_SIMPLE_STAIRS_START_LEVEL", "3")
+    cfg = ss.make_microduck_simple_stairs_env_cfg()
+    assert list(cfg.events)[0] == "seed_start_level"  # runs before the spawn
+    assert cfg.events["seed_start_level"].params["level"] == 3
+
+    class _StubEnv:
+        num_envs = 4
+        device = "cpu"
+
+    env = _StubEnv()
+    seed = cfg.events["seed_start_level"].func
+    seed(env, None, **cfg.events["seed_start_level"].params)
+    assert env._stair.level.tolist() == [3, 3, 3, 3]
+    env._stair.level[0] = 1  # simulate curriculum movement...
+    seed(env, None, **cfg.events["seed_start_level"].params)  # one-shot: no re-pin
+    assert env._stair.level[0] == 1
+
+
+def test_warm_start_patch_resets_counters(monkeypatch):
+    """MICRODUCK_WARM_START=1 zeroes the env step counter and the iteration
+    after a checkpoint load; unset, the restored values are kept."""
+    snap_mdp = _load_snapshot_mdp()
+    from mjlab.rl.runner import MjlabOnPolicyRunner
+
+    class _Unwrapped:
+        common_step_counter = 96000
+
+    class _Env:
+        unwrapped = _Unwrapped()
+
+    class _Runner:
+        env = _Env()
+        current_learning_iteration = 3998
+
+    monkeypatch.setattr(
+        snap_mdp, "_orig_runner_load",
+        lambda self, path, *a, **k: {"env_state": {"common_step_counter": 96000}},
+    )
+    monkeypatch.setenv(snap_mdp.WARM_START_ENV, "1")
+    r = _Runner()
+    MjlabOnPolicyRunner.load(r, "model_3998.pt")
+    assert r.env.unwrapped.common_step_counter == 0
+    assert r.current_learning_iteration == 0
+
+    monkeypatch.delenv(snap_mdp.WARM_START_ENV)
+    r = _Runner()
+    r.env = _Env()
+    r.env.unwrapped = _Unwrapped()
+    MjlabOnPolicyRunner.load(r, "model_3998.pt")
+    assert r.env.unwrapped.common_step_counter == 96000
+    assert r.current_learning_iteration == 3998

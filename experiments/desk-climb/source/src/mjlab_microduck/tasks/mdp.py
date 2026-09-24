@@ -113,6 +113,40 @@ except Exception:
 
 print("[mdp] Patch 4 active: ONNX export filters passive_* joints")
 
+# Patch 5: warm start (ported from microduck_rl).  MjlabOnPolicyRunner.load
+# restores env.common_step_counter (and rsl_rl restores the iteration) from
+# the checkpoint so a RESUMED run keeps its curricula.  A WARM START loads a
+# previous run's weights as a new starting point — there the restored counter
+# (e.g. ~4000 iterations of v14) would jump every step-based curriculum to
+# its final stage in iteration 1 (and max_iterations would already be
+# exceeded).  With MICRODUCK_WARM_START=1 the counters restart at 0 after
+# loading (weights, normalizers and optimizer are kept).
+WARM_START_ENV = "MICRODUCK_WARM_START"
+
+try:
+    import os as _os
+
+    from mjlab.rl.runner import MjlabOnPolicyRunner as _MjlabRunner  # noqa: E402
+
+    _orig_runner_load = _MjlabRunner.load
+
+    def _load_with_warm_start(self, path, *args, **kwargs):
+        infos = _orig_runner_load(self, path, *args, **kwargs)
+        if _os.environ.get(WARM_START_ENV, "") not in ("", "0"):
+            restored = self.env.unwrapped.common_step_counter
+            self.env.unwrapped.common_step_counter = 0
+            self.current_learning_iteration = 0
+            print(
+                f"[mdp] Patch 5: WARM START from {path} — common_step_counter "
+                f"{restored} → 0, iteration → 0 (curricula restart; weights/normalizer/optimizer kept)"
+            )
+        return infos
+
+    _MjlabRunner.load = _load_with_warm_start
+    print("[mdp] Patch 5 active: MICRODUCK_WARM_START=1 restarts curricula after checkpoint load")
+except Exception as _e:  # pragma: no cover
+    print(f"[mdp] Patch 5 NOT applied ({_e!r})")
+
 if TYPE_CHECKING:
     from mjlab.viewer.debug_visualizer import DebugVisualizer
 
@@ -518,6 +552,7 @@ def reset_stair_ladder(
     approach_swing_prob: float = 0.7,
     min_start_tread: int = 0,
     open_riser: bool = False,
+    top_approach_prob: float = 0.0,
 ) -> None:
     """Place the ladder for each environment and spawn the robot on it.
 
@@ -666,6 +701,22 @@ def reset_stair_ladder(
         force_top = (~on_floor) & (~force_app) & (torch.rand(n, device=dev) < top_spawn_prob)
         start = torch.where(force_top, torch.full_like(start, top_idx), start)
     start = torch.where(on_floor, torch.zeros_like(start), start)
+    # simple_stairs v15: near-top "last mile" spawn.  The v14c policy climbs
+    # steadily to ~tread 9 but cannot finish the final 1-2 treads onto the
+    # top platform (falls BACK down the stairs).  A top_approach_prob share
+    # of non-floor spawns starts as a static stance on (k, k+1) with
+    # k in {num_treads-4 .. num_treads-2} (simple_stairs: 8, 9, 10 — feet on
+    # 8/9, 9/10 or 10/top-nose), so the final treads-to-platform transition
+    # gets dense on-policy experience.  These episodes cannot rise
+    # promote_rise_m and their stop-fails end early, so they are also marked
+    # spawn_on_top (the s34 curriculum skip) below.
+    force_topapp = torch.zeros(n, dtype=torch.bool, device=dev)
+    if top_approach_prob > 0.0 and geometry.landing_every > 0:
+        force_topapp = (~on_floor) & (torch.rand(n, device=dev) < top_approach_prob)
+        top_start = torch.randint(
+            max(0, geometry.num_treads - 4), geometry.num_treads - 1, (n,), device=dev
+        )
+        start = torch.where(force_topapp, top_start, start)
     run = riser / torch.tan(angle)
     start_is_landing = staircase & (start == land_idx) if staircase else torch.zeros(n, dtype=torch.bool, device=dev)
     start_is_top = (start == top_idx) if has_top else torch.zeros(n, dtype=torch.bool, device=dev)
@@ -694,9 +745,13 @@ def reset_stair_ladder(
     start_base_z = base_z_all.gather(1, flight_of_start[:, None]).squeeze(1)
     # Higher foot on the first landing: from the last mini tread's centre to
     # the landing nose (setback + half a tread further than a regular run).
+    # ``onto_top`` is the single-flight analogue for the v15 top-approach
+    # spawn: start == num_treads - 2 stands the higher foot just past the top
+    # platform's nose (the staircase's onto_landing formula).
     onto_landing = staircase & (start + 1 == land_idx)
+    onto_top = force_topapp & (start == geometry.num_treads - 2)
     stance_forward = torch.where(
-        onto_landing,
+        onto_landing | onto_top,
         (run + geometry.landing_setback_m + 0.5 * geometry.tread_depth_m + geometry.landing_target_ahead_m).clamp_max(0.065),
         run,
     )
@@ -826,7 +881,7 @@ def reset_stair_ladder(
     # Approach spawns are mostly mid-swing onto the landing (reverse curriculum
     # for the lift-then-reach step); other stance spawns keep swing_spawn_prob.
     swing_p = torch.where(force_app, torch.full_like(swing_draw, float(approach_swing_prob)), torch.full_like(swing_draw, swing_spawn_prob)) if staircase else torch.full_like(swing_draw, swing_spawn_prob)
-    swing = (~flat_spawn) & (~start_is_landing) & (~onto_landing) & (swing_draw < swing_p)
+    swing = (~flat_spawn) & (~start_is_landing) & (~onto_landing) & (~force_topapp) & (swing_draw < swing_p)
     support_side = (
         torch.where(((start + 1) % 2 == 0), 1.0, -1.0)
         if geometry.alternating
@@ -948,7 +1003,7 @@ def reset_stair_ladder(
     state.spawn_on_landing[env_ids] = on_landing
     if not hasattr(state, "spawn_on_top"):
         state.spawn_on_top = torch.zeros(env.num_envs, dtype=torch.bool, device=dev)
-    state.spawn_on_top[env_ids] = start_is_top
+    state.spawn_on_top[env_ids] = start_is_top | force_topapp
 
 
 def _stair_leg_joint_ids(env: ManagerBasedRlEnv, asset: Entity, side: str) -> list[int]:
@@ -9173,6 +9228,7 @@ def reset_floor_desk(
     approach_swing_prob: float = 0.7,
     min_start_tread: int = 0,
     open_riser: bool = False,
+    top_approach_prob: float = 0.0,
 ) -> None:
     """Retain standard randomized proprioceptive spawn; place the entire rigid design."""
     params=locals().copy();params.pop("env");params.pop("env_ids")

@@ -32,19 +32,35 @@ treads steady pause (falls 0.25 -> 0.99).  The stall window is now 4.0 s
 so only a TRUE no-progress park of 4+ s pays) and the weight 1.0 (park
 income ~0.54/step vs the -1.0/step price — still a 2x kill, but a steady
 pause is no longer fatal).  F2 unchanged.
+
+v15 (top-platform finish): the v14c policy climbs steadily (median 9
+treads, mean level ~3.2) but cannot finish the final 1-2 treads onto the
+top platform — it pokes its head past the nose, cannot recover the CoM and
+falls BACK down.  A ``top_approach_prob`` (0.35 train / 0 eval) share of
+non-floor spawns starts as a static stance on (k, k+1) with k in
+{num_treads-4 .. num_treads-2} (8, 9, 10 — including the just-arrived
+10/top-nose stance, the staircase family's onto-landing formula), marking
+them spawn_on_top so stop-fails don't demote (the s34 lesson); the share
+decays to 0.15 at iter 1000 (event_param_curriculum).  Warm start: load a
+v14c checkpoint with MICRODUCK_WARM_START=1 (mdp.py Patch 5 — counters and
+iteration restart at 0, weights/normalizer/optimizer kept) plus
+MICRODUCK_SIMPLE_STAIRS_START_LEVEL=3 (one-shot level seed — the loaded
+policy consolidated at mean level ~3.2, so the curriculum resumes near its
+level instead of re-proving L0).  Rewards untouched for attribution.
 """
 
 import os
 from copy import deepcopy
 
 from mjlab.envs import ManagerBasedRlEnvCfg
-from mjlab.managers import RewardTermCfg
+from mjlab.managers import CurriculumTermCfg, EventTermCfg, RewardTermCfg
 
 from ..robot.ladder import StairLadderGeometry
 from .microduck_ladder_env_cfg import (
     MicroduckLadderRlCfg,
     make_microduck_ladder_env_cfg,
 )
+from .microduck_velocity_env_cfg import NUM_STEPS_PER_ENV
 from mjlab_microduck.tasks import mdp as microduck_mdp
 
 # 12 treads up to a full-depth top platform.
@@ -115,12 +131,40 @@ def _foot_targets_per_side(
     return torch.nan_to_num(out, nan=0.0).clamp(-5.0, 5.0)
 
 
+def _seed_start_level(env, env_ids, geometry, level: int) -> None:
+    """One-shot curriculum-level seed for warm starts (v15).
+
+    A fresh env starts every env at level 0 (``_stair_ensure_state``), so a
+    warm-started policy that consolidated at a high level would waste its
+    competence re-proving the shallow levels — and the v15 target (the top
+    transition at the target risers) needs L3+ exposure from iteration 0.
+    Registered as a reset-mode event BEFORE reset_stair_ladder: on the first
+    reset it pins every env to ``level`` (the first spawn is already at the
+    seeded level), then never fires again — the adaptive
+    ladder_level_curriculum takes over (demote on early falls, promote on
+    climbs).  From-scratch runs leave ``start_level`` at 0 (unchanged).
+    """
+    state = microduck_mdp._stair_ensure_state(env, geometry)
+    if getattr(state, "start_level_seeded", False):
+        return
+    state.start_level_seeded = True
+    state.level[:] = int(level)
+
+
 def make_microduck_simple_stairs_env_cfg(
     play: bool = False,
     top_spawn_prob: float = 0.0,
     per_side_targets: bool = os.getenv("MICRODUCK_SIMPLE_STAIRS_PER_SIDE", "0") == "1",
+    top_approach_prob: float | None = None,
+    start_level: int | None = None,
 ) -> ManagerBasedRlEnvCfg:
     """Straight full-width staircase with a top platform (see module docstring)."""
+    if top_approach_prob is None:
+        # v15: near-top spawn in training; OFF in play/eval so the success
+        # rate measures the natural climb, not the bolt-on (house rule).
+        top_approach_prob = 0.0 if play else 0.35
+    if start_level is None:
+        start_level = int(os.getenv("MICRODUCK_SIMPLE_STAIRS_START_LEVEL", "0"))
     cfg = make_microduck_ladder_env_cfg(
         play=play,
         geometry=SIMPLE_STAIRS_GEOMETRY,
@@ -129,6 +173,7 @@ def make_microduck_simple_stairs_env_cfg(
         max_start_tread=8,
         top_spawn_prob=top_spawn_prob,
         open_riser=True,  # v12: 25 mm risers through the open gap, not under the tread
+        top_approach_prob=top_approach_prob,
     )
     # v13 F1: anti-park.  The stance composite pays ~0.54/step for standing on
     # treads under a climb command (track factor 0.27 x weight 2.0), and the
@@ -157,6 +202,33 @@ def make_microduck_simple_stairs_env_cfg(
     # ceiling to 69 mm (covers the 66.6 median; p90 72.4 keeps a small tax as
     # anti-fling pressure) and the L4 ceiling to 78 mm.
     cfg.rewards["swing_overshoot"].params["clearance"] = 0.05
+    # v15: decay the near-top spawn share.  The top transition is a bolt-on,
+    # not the main course: dense last-mile practice in the first half, then a
+    # retention share so ordinary climbs re-dominate (the v10 lesson — a
+    # nearly-done spawn left at full share retrains away the base skill).
+    if top_approach_prob > 0.0 and not play:
+        cfg.curriculum["top_approach_spawn"] = CurriculumTermCfg(
+            func=microduck_mdp.event_param_curriculum,
+            params={
+                "event_name": "reset_stair_ladder",
+                "param_stages": [
+                    {"step": 0, "params": {"top_approach_prob": top_approach_prob}},
+                    {"step": 1000 * NUM_STEPS_PER_ENV, "params": {"top_approach_prob": 0.15}},
+                ],
+            },
+        )
+    # v15 warm-start curriculum seed (see _seed_start_level).  Seeded via
+    # MICRODUCK_SIMPLE_STAIRS_START_LEVEL (3 for the v14c warm start, whose
+    # policy consolidated at mean level ~3.2); 0/off for from-scratch runs.
+    if start_level > 0:
+        cfg.events = {
+            "seed_start_level": EventTermCfg(
+                func=_seed_start_level,
+                mode="reset",
+                params={"geometry": SIMPLE_STAIRS_GEOMETRY, "level": start_level},
+            ),
+            **cfg.events,
+        }
     if per_side_targets:
         from mjlab.managers import SceneEntityCfg
 

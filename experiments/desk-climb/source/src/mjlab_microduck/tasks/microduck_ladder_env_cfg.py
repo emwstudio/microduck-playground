@@ -144,6 +144,7 @@ def make_microduck_ladder_env_cfg(
     path_spawn_frac: float = 0.0,
     nose_jitter_m: float = float(os.getenv("MICRODUCK_LADDER_NOSE_JITTER_M", "0.0")),
     open_riser: bool = False,
+    top_approach_prob: float = 0.0,
 ) -> ManagerBasedRlEnvCfg:
     cfg = make_microduck_velocity_env_cfg(play=play, rough=False)
 
@@ -323,6 +324,9 @@ def make_microduck_ladder_env_cfg(
         # instead of under the next tread (see ladder.clamp_riser_angle).
         # False everywhere else — zero behaviour change for the ladder tasks.
         "open_riser": open_riser,
+        # simple_stairs v15: near-top "last mile" static spawns (start in
+        # {num_treads-4 .. num_treads-2}); 0 everywhere else.
+        "top_approach_prob": top_approach_prob,
     }
     if play:
         spawn_params.update(_play_overrides())
