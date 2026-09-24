@@ -517,6 +517,7 @@ def reset_stair_ladder(
     path_spawn_frac: float = 0.0,
     approach_swing_prob: float = 0.7,
     min_start_tread: int = 0,
+    open_riser: bool = False,
 ) -> None:
     """Place the ladder for each environment and spawn the robot on it.
 
@@ -578,20 +579,12 @@ def reset_stair_ladder(
         riser = torch.full_like(riser, float(fixed_riser_m))
     if fixed_angle_deg is not None:
         angle_deg = torch.full_like(angle_deg, float(fixed_angle_deg))
-    # Clearance rules (see robot/ladder.py): toe under the next same-side
-    # tread, ankle shell either above-cleared or behind it.  Clamp the riser
-    # up and the angle down where the depth rule binds.
-    riser = riser.clamp_min(geometry.min_riser_m())
-    spacing = geometry.same_side_spacing()
-    ankle_allowance = (
-        _ladder.SOLE_TOE_AHEAD_OF_SITE_M + 0.005 - _ladder.ANKLE_SHELL_AHEAD_OF_SITE_M
-    )
-    min_run = max(geometry.tread_depth_m - ankle_allowance, 1e-4)
-    max_angle = torch.rad2deg(torch.atan(spacing * riser / min_run))
-    clears = (spacing * riser - geometry.tread_thickness_m) >= (
-        _ladder.ANKLE_SHELL_HEIGHT_M + 0.003
-    )
-    angle_deg = torch.where(clears, angle_deg, torch.minimum(angle_deg, max_angle))
+    # Clearance rules (see robot/ladder.py).  Default (under-tread): toe under
+    # the next same-side tread — clamp the riser up and the angle down where
+    # the depth rule binds.  ``open_riser`` (simple-stairs 25 mm design): the
+    # toe passes through the open gap between consecutive treads — skip the
+    # riser clamp, clamp the angle so run >= tread depth + margin.
+    riser, angle_deg = _ladder.clamp_riser_angle(geometry, riser, angle_deg, open_riser=open_riser)
     angle = torch.deg2rad(angle_deg)
     staircase = geometry.landing_every > 0 and geometry.num_flights > 1
     def _level_range(key: str, default: tuple[float, float], scale: float = 1.0) -> torch.Tensor:
@@ -9179,6 +9172,7 @@ def reset_floor_desk(
     path_spawn_frac: float = 0.0,
     approach_swing_prob: float = 0.7,
     min_start_tread: int = 0,
+    open_riser: bool = False,
 ) -> None:
     """Retain standard randomized proprioceptive spawn; place the entire rigid design."""
     params=locals().copy();params.pop("env");params.pop("env_ids")

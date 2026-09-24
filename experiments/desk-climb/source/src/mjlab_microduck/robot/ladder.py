@@ -222,8 +222,22 @@ class StairLadderGeometry:
 
 
 def validate_tread_clearance(
-    geometry: StairLadderGeometry, riser_m: float, angle_deg: float
+    geometry: StairLadderGeometry, riser_m: float, angle_deg: float, open_riser: bool = False, gap_margin_m: float = 0.002
 ) -> None:
+    if open_riser:
+        # Open-riser stairs: the swing toe passes through the open gap between
+        # consecutive treads, so the binding rule is that the gap EXISTS
+        # (run >= tread depth + margin).  The ankle-shell depth rule is then
+        # satisfied automatically (run >= depth implies depth <= run +
+        # ankle allowance).
+        run = geometry.same_side_spacing() * riser_m / math.tan(math.radians(angle_deg))
+        if run < geometry.tread_depth_m + gap_margin_m:
+            raise ValueError(
+                f"open-riser gap check: run {run * 1000:.1f} mm is below tread depth "
+                f"+ margin {(geometry.tread_depth_m + gap_margin_m) * 1000:.1f} mm at riser "
+                f"{riser_m * 1000:.1f} mm / {angle_deg:.1f} deg"
+            )
+        return
     if riser_m < geometry.min_riser_m():
         raise ValueError(
             f"riser {riser_m * 1000:.1f} mm is below the toe clearance minimum "
@@ -236,6 +250,43 @@ def validate_tread_clearance(
             f"clearance limit {max_depth * 1000:.1f} mm at riser "
             f"{riser_m * 1000:.1f} mm / {angle_deg:.0f} deg"
         )
+
+
+def clamp_riser_angle(
+    geometry: StairLadderGeometry,
+    riser: torch.Tensor,
+    angle_deg: torch.Tensor,
+    open_riser: bool = False,
+    gap_margin_m: float = 0.002,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Clamp sampled (riser, angle_deg) to the tread-clearance rules.
+
+    Default (under-tread) path — the swing toe passes UNDER the next
+    same-side tread: clamp the riser up to ``min_riser_m`` (the toe must fit
+    under it) and the angle down where the ankle-shell depth rule binds.
+    Exactly the legacy inline math of ``reset_stair_ladder``.
+
+    ``open_riser`` path — consecutive treads leave an open gap
+    (run >= tread depth + ``gap_margin_m``) and the swing toe passes THROUGH
+    the gap instead of under the next tread (the simple-stairs 25 mm design:
+    run = 25 mm / tan(20 deg) = 68.7 mm > 62 mm on the 60 mm treads).  The
+    min_riser clamp is skipped (a 25 mm riser stays 25 mm, not 29 mm) and the
+    angle is clamped so the gap exists.  The ankle-shell depth rule is
+    satisfied automatically whenever the gap exists, so no second clamp.
+    """
+    spacing = geometry.same_side_spacing()
+    if open_riser:
+        max_angle = torch.rad2deg(
+            torch.atan(spacing * riser / (geometry.tread_depth_m + gap_margin_m))
+        )
+        return riser, torch.minimum(angle_deg, max_angle)
+    riser = riser.clamp_min(geometry.min_riser_m())
+    ankle_allowance = SOLE_TOE_AHEAD_OF_SITE_M + 0.005 - ANKLE_SHELL_AHEAD_OF_SITE_M
+    min_run = max(geometry.tread_depth_m - ankle_allowance, 1e-4)
+    max_angle = torch.rad2deg(torch.atan(spacing * riser / min_run))
+    clears = (spacing * riser - geometry.tread_thickness_m) >= (ANKLE_SHELL_HEIGHT_M + 0.003)
+    angle_deg = torch.where(clears, angle_deg, torch.minimum(angle_deg, max_angle))
+    return riser, angle_deg
 
 
 def stair_ladder_geometry_from_env() -> StairLadderGeometry:

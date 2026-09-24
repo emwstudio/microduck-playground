@@ -143,6 +143,7 @@ def make_microduck_ladder_env_cfg(
     head_contact_weight: float = 0.0,
     path_spawn_frac: float = 0.0,
     nose_jitter_m: float = float(os.getenv("MICRODUCK_LADDER_NOSE_JITTER_M", "0.0")),
+    open_riser: bool = False,
 ) -> ManagerBasedRlEnvCfg:
     cfg = make_microduck_velocity_env_cfg(play=play, rough=False)
 
@@ -318,6 +319,10 @@ def make_microduck_ladder_env_cfg(
         "swing_clearance": 0.012,
         "swing_lateral_shift": 0.02,
         "level_mix_prob": 0.3,
+        # simple_stairs 25 mm design: toe through the open gap between treads
+        # instead of under the next tread (see ladder.clamp_riser_angle).
+        # False everywhere else — zero behaviour change for the ladder tasks.
+        "open_riser": open_riser,
     }
     if play:
         spawn_params.update(_play_overrides())

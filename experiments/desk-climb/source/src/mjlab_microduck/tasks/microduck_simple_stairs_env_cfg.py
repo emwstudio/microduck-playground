@@ -1,9 +1,21 @@
 """Simple straight staircase ("ordinary stairs") for Microduck.
 
-Full-width 60 mm treads (the whole 54 mm sole fits flat), 30 mm risers at
-~27 degrees, eleven mini treads up to a full-depth top platform.
-Deliberately plain: no alternating half-width treads, no curved top
-section, no clamps or bridge plates — a normal straight flight of stairs.
+Full-width 60 mm treads (the whole 54 mm sole fits flat) and OPEN risers:
+with the angle shallow enough that run = riser/tan(angle) exceeds the 60 mm
+tread depth, consecutive treads leave an open gap and the swing toe passes
+through the gap instead of under the next tread.  That makes risers BELOW
+the 29 mm toe-under-tread minimum (ladder.py:min_riser_m) legal — the v12
+design converges on 25 mm at ~19-20 deg (run 68.7 mm, gap ~8.7 mm), inside
+the official gait family's ~25 mm step envelope (FK: foot apex clearance
+median 66.6 / p10 34.7 mm).  v1-v3 failed because the reset clamped risers
+to 29 mm, above that envelope.
+
+The reset enforces the gap per env: ``reset_stair_ladder(open_riser=True)``
+skips the min_riser clamp and instead clamps the angle so
+run >= tread depth + 2 mm (see ladder.clamp_riser_angle).  The level table
+below is drawn up so every band already satisfies the gap at its lower
+riser, so the clamp is a guard, not a distortion.  12 treads up to a
+full-depth top platform.
 """
 
 import os
@@ -17,26 +29,27 @@ from .microduck_ladder_env_cfg import (
     make_microduck_ladder_env_cfg,
 )
 
-# 12 treads of 30 mm: a 36 cm straight flight ending on the top platform.
+# 12 treads up to a full-depth top platform.
 SIMPLE_STAIRS_GEOMETRY = StairLadderGeometry(
     num_treads=12,
     alternating=False,
     tread_depth_m=0.060,  # the whole 54 mm sole rests flat (validate cap: 60 mm)
     landing_every=12,  # the 12th tread is the full-depth top platform
 )
-# Full-width treads space same-side treads one riser apart, so with
-# overlapping treads the toe needs riser >= 29 mm
-# (StairLadderGeometry.min_riser_m).  The curriculum therefore starts with
-# small risers at *open-riser* angles (run >= tread depth: the swing foot
-# passes through the gaps, never under a tread) and converges on 30 mm at
-# 26.6 deg where the 60 mm treads tile contiguously.  Mirrors LADDER_LEVELS'
-# riser bands with angles recomputed to the tiling boundary.
+# v12 course: 15 -> 25.5 mm risers.  Full-width treads space same-side treads
+# one riser apart, so the toe-under-tread rule would need riser >= 29 mm
+# (min_riser_m) — above the ~25 mm step envelope.  With OPEN risers the
+# binding rule is the gap: run = riser/tan(angle) >= 62 mm (60 mm depth +
+# 2 mm margin).  Each band's top angle is atan(riser_lo / 0.062), so the
+# band always satisfies the gap at its own lower riser; the reset's
+# open_riser clamp guards the draws.  Level 4 is 24-25.5 mm at 19-20 deg —
+# the target envelope riser with run ~68.7 mm at 25 mm / 20 deg.
 SIMPLE_STAIRS_LEVELS: tuple[dict, ...] = (
-    {"riser": (0.015, 0.017), "angle": (13.0, 14.0)},
-    {"riser": (0.017, 0.020), "angle": (14.0, 15.8)},
-    {"riser": (0.020, 0.023), "angle": (15.8, 18.4)},
-    {"riser": (0.023, 0.027), "angle": (18.4, 21.0)},
-    {"riser": (0.027, 0.030), "angle": (21.0, 24.2)},
+    {"riser": (0.015, 0.017), "angle": (13.0, 13.6)},
+    {"riser": (0.017, 0.020), "angle": (13.6, 15.3)},
+    {"riser": (0.020, 0.022), "angle": (15.3, 17.9)},
+    {"riser": (0.022, 0.024), "angle": (17.9, 19.5)},
+    {"riser": (0.024, 0.0255), "angle": (19.0, 20.0)},
 )
 SIMPLE_STAIRS_EPISODE_LENGTH_S = 12.0
 
@@ -97,6 +110,7 @@ def make_microduck_simple_stairs_env_cfg(
         episode_length_s=SIMPLE_STAIRS_EPISODE_LENGTH_S,
         max_start_tread=8,
         top_spawn_prob=top_spawn_prob,
+        open_riser=True,  # v12: 25 mm risers through the open gap, not under the tread
     )
     if per_side_targets:
         from mjlab.managers import SceneEntityCfg
