@@ -123,10 +123,11 @@ def test_v13_stall_penalty_and_overshoot_clearance():
     ladder_mod.microduck_mdp = snap_mdp
     ss.microduck_mdp = snap_mdp  # the simple_stairs module bound the main mdp at import
     cfg = ss.make_microduck_simple_stairs_env_cfg()
-    # F1: the anti-park stall penalty is wired, self-negating -> POSITIVE weight
+    # F1 (v14 dose): the anti-park stall penalty is wired, self-negating ->
+    # POSITIVE weight; 4 s window (only true parks), 2x-kill weight 1.0.
     assert "tread_stall" in cfg.rewards
-    assert cfg.rewards["tread_stall"].weight == 2.0
-    assert cfg.rewards["tread_stall"].params["stall_s"] == 2.0
+    assert cfg.rewards["tread_stall"].weight == 1.0
+    assert cfg.rewards["tread_stall"].params["stall_s"] == 4.0
     # F2: the overshoot ceiling now covers the official gait family's foot apex
     assert cfg.rewards["swing_overshoot"].params["clearance"] == 0.05
     l0_riser_hi = ss.SIMPLE_STAIRS_LEVELS[0]["riser"][1]  # 0.017

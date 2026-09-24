@@ -24,6 +24,14 @@ ladder recipe has no anti-park term); F2 widens the swing-overshoot
 clearance 25 -> 50 mm so the official gait family's ~67 mm foot apex is
 legal at the shallow 15-17 mm risers (the ceiling is support + riser +
 3 mm + clearance on this one-riser-spacing geometry).
+
+v14 dose correction (single variable): F1 cured the retreat farm
+(0.44 -> 0.04) but the 2 s / 2.0 dose also condemned the normal between-
+treads steady pause (falls 0.25 -> 0.99).  The stall window is now 4.0 s
+(the duck steps at ~0.4 s/step and measured inter-tread pauses run 1-3 s,
+so only a TRUE no-progress park of 4+ s pays) and the weight 1.0 (park
+income ~0.54/step vs the -1.0/step price — still a 2x kill, but a steady
+pause is no longer fatal).  F2 unchanged.
 """
 
 import os
@@ -127,14 +135,19 @@ def make_microduck_simple_stairs_env_cfg(
     # plain ladder recipe carries no stall price — the v12 policy mounts 1-2
     # treads and parks ("低头站桩", retreated rising).  The staircase-landing
     # family fixed this exact basin with ladder_tread_stall_penalty (s15-17);
-    # it was never wired into the plain ladder recipe.  Weight 2.0 ≈ 4x the
-    # park's per-step income, so parking goes net-negative while a climb that
-    # progresses every 2 s is untouched (the counter re-arms on each new
-    # tread).  Self-negating function -> POSITIVE weight.
+    # it was never wired into the plain ladder recipe.  Self-negating function
+    # -> POSITIVE weight.
+    # v14 dose correction (v13 cured the retreat farm 0.44 -> 0.04 but
+    # overdosed: stall_s 2.0 / w 2.0 also condemned the normal between-treads
+    # steady pause, falls 0.25 -> 0.99).  stall_s 4.0: the duck steps at
+    # ~0.4 s/step and measured between-treads pauses run 1-3 s, so a 4 s
+    # window only catches a TRUE park (no new tread in 4+ s).  weight 1.0:
+    # the park's income stays ~0.54/step vs the -1.0/step price — still a 2x
+    # kill — but an unlucky steady pause is no longer fatal.
     cfg.rewards["tread_stall"] = RewardTermCfg(
         func=microduck_mdp.ladder_tread_stall_penalty,
-        weight=2.0,
-        params={"stall_s": 2.0},
+        weight=1.0,
+        params={"stall_s": 4.0},
     )
     # v13 F2: let the natural step fit under the overshoot ceiling.  With
     # same_side_spacing=1 the ceiling is support + riser + 3 mm + clearance =
