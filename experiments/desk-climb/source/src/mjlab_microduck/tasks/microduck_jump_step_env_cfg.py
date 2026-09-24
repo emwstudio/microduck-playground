@@ -12,9 +12,10 @@ Task
   discovered from the floor, so the reverse curriculum moves to the very end
   state and walks back); ``edge_spawn_prob`` (0.2) on the floor 0.04-0.08 m
   from the front face; the rest on the floor 0.18-0.25 m away.  The airborne
-  fraction retires as the AIRBORNE-episode landed rate climbs (thresholds
-  0.3/0.5/0.7 -> prob 0.4/0.2/0.0, 200-episode windows), leaving pure floor
-  spawns once the landing is consolidated.  The platform top height IS the
+  fraction retires as the AIRBORNE-episode landed rate climbs (v10 thresholds
+  0.15/0.30/0.50 -> prob 0.4/0.2/0.0, 200-episode windows; the v9 0.3/0.5/0.7
+  table never fired under training-time noise), leaving pure floor spawns
+  once the landing is consolidated.  The platform top height IS the
   twist command: ``vx`` is sampled in 0.025-0.035 m (inside the step-up
   envelope) and the reset event places the mocap platform so its top sits at
   that height.  Jump onto the platform and stand.
@@ -106,10 +107,18 @@ SPAWN_AIRBORNE = 3  # reverse-curriculum spawn dropping onto the platform top
 # success rate (floor success is 0 early, so it cannot drive the schedule).
 # Highest satisfied rate threshold wins; counters reset on every stage change
 # (each stage is measured on a fresh window of AIRBORNE_CURRICULUM_MIN_EPISODES).
+# v10 thresholds: the v9 table (0.3/0.5/0.7) never fired — the deterministic
+# eval lands 57.9 % of airborne drops, but the TRAINING-time rate (sampled
+# actions, obs noise, DR) is several-fold lower and stayed under 0.3, pinning
+# the schedule at 0.6.  First rung 0.15 ≈ eval-rate/4 (a conservative
+# stochastic-policy floor — reachable once landings exist at all); second
+# rung 0.30 keeps the ladder spacing meaningful; retirement at 0.50 ≈ the
+# deterministic rate minus margin (reachable as training approaches eval
+# quality).  Bidirectional: a rate collapse re-introduces airborne spawns.
 AIRBORNE_CURRICULUM = (
-    {"rate": 0.7, "prob": 0.0},
-    {"rate": 0.5, "prob": 0.2},
-    {"rate": 0.3, "prob": 0.4},
+    {"rate": 0.50, "prob": 0.0},
+    {"rate": 0.30, "prob": 0.2},
+    {"rate": 0.15, "prob": 0.4},
     {"rate": 0.0, "prob": 0.6},
 )
 AIRBORNE_CURRICULUM_MIN_EPISODES = 200

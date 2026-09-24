@@ -72,6 +72,8 @@ def test_airborne_constants_and_stage_table():
     assert rates == sorted(rates, reverse=True)
     assert probs == sorted(probs)
     assert probs[0] == 0.0 and probs[-1] == 0.6
+    # v10: first rung reachable under training-time noise (v9's 0.3 never fired)
+    assert rates == [0.50, 0.30, 0.15, 0.0]
 
 
 def test_reset_signature_defaults():
@@ -117,18 +119,18 @@ def test_airborne_curriculum_below_min_episodes_noop():
 
 
 def test_airborne_curriculum_stage_transitions():
-    # rate 0.8 >= 0.7 -> retire airborne spawns entirely
+    # rate 0.8 >= 0.50 -> retire airborne spawns entirely
     env = _StubEnv(0.6)
     assert _run_curriculum(env, done=250, landed=200) == 0.0
     state = js._jump_step_state(env)
     assert state.airborne_done == 0 and state.airborne_landed == 0  # window reset
     assert env.event_manager.get_term_cfg("reset_jump_step").params["airborne_spawn_prob"] == 0.0
-    # rate 0.55 -> 0.2
+    # rate 0.35 -> 0.2
     env = _StubEnv(0.4)
-    assert _run_curriculum(env, done=200, landed=110) == 0.2
-    # rate 0.4 -> 0.4
+    assert _run_curriculum(env, done=200, landed=70) == 0.2
+    # rate 0.2 -> 0.4
     env = _StubEnv(0.6)
-    assert _run_curriculum(env, done=200, landed=80) == 0.4
+    assert _run_curriculum(env, done=200, landed=40) == 0.4
     # rate 0.1 -> stays 0.6 (highest tier)
     env = _StubEnv(0.6)
     assert _run_curriculum(env, done=200, landed=20) == 0.6
