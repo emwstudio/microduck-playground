@@ -69,14 +69,22 @@ v18 (single variable: the gate condition).  The v17 level gate deadlocked:
 in the tax-free L0-L1 zone "climb 2 and retreat" was the free optimum (the
 v12 retreat farm resurrected at 0.42), so no env ever reached L2 and the
 tax never engaged — exploration-tax again, this time via the farm eating
-the free zone.  The gate now keys on the EPISODE'S OWN high-water mark
-(``TUMBLE_DEFICIT_MIN_TREAD = 5``): once this episode has stood on tread 5
-the tax is on for its remainder (finish pressure arrives with the first
-success); episodes that never got high stay free to explore.  5 is the
-waist the ~2-3-tread farm cannot touch but any breakthrough (v14 p90 = 11)
-must pass.  Watch: Episode_Reward/tumble_deficit (weighted effect — zero
-in low episodes, negative in high ones) and swing_retreated_fraction
-(the farm signature; should not rise).
+the free zone.  The gate now keys on the EPISODE'S OWN high-water mark:
+once this episode has stood on the threshold tread the tax is on for its
+remainder (finish pressure arrives with the first success); episodes that
+never got high stay free to explore.
+
+v19 (single variable: threshold 5 -> 8).  The v18 threshold taxed the
+breakthrough itself — v14's reckless 11-tread charges are built out of
+mid-charge slips, and the gate made every slip back below 5 bleed, so the
+frontier died with the farm still untouchable (two runs, no ignition).
+8 confines the finish tax to the probe-proven crash zone (78-81 % of
+v14c's falls start at the tread 8-11 top-nose region,
+probe-fall-location.json): the 5-7 waist is free to charge through, the
+~2-3-tread farm still cannot reach the gate.  Watch:
+Episode_Reward/tumble_deficit (weighted effect — zero below 8, negative
+above), swing_retreated_fraction (farm signature; must not rise), and
+rise_p90 (must recover toward v14's 11 — the 5-7 frontier is free again).
 """
 
 import os
@@ -168,15 +176,19 @@ def _foot_targets_per_side(
 # tax-free L0-L1 zone "climb 2, retreat" was the free optimum (the v12
 # retreat farm resurrected at 0.42), so no env ever reached L2 and the tax
 # never engaged.  Gating on per-episode performance instead: once THIS
-# episode has stood on tread >= 5 the tax is on for its remainder (the
-# finish pressure arrives with the first success); episodes that never got
-# high stay free to explore.  Threshold 5: the v14 farm's ceiling was ~2-3
-# treads, so farm episodes never pay (they also never amount to anything —
-# acceptable), while an ignition trajectory (v14 p90 reaching 11) crosses 5
-# on the way up — 5 is the waist the farm cannot touch but any breakthrough
-# must pass.  A mid-episode latch means the tax engages the moment the duck
-# first stands on tread 5, not at the next reset.
-TUMBLE_DEFICIT_MIN_TREAD = 5
+# episode has stood on tread >= MIN_TREAD the tax is on for its remainder
+# (the finish pressure arrives with the first success); episodes that never
+# got high stay free to explore.  A mid-episode latch means the tax engages
+# the moment the duck first stands on the threshold tread, not at the next
+# reset.
+# v19: threshold 5 -> 8 (single variable).  5 taxed the breakthrough itself:
+# v14's reckless 11-tread charges were built out of mid-charge slips, and
+# the v18 gate made exactly those slip back below 5 bleed (two runs, no
+# ignition).  8 confines the finish tax to the probe-proven crash zone —
+# probe-fall-location.json puts 78-81 % of v14c's falls at the tread 8-11
+# top-nose region — while the 5-7 waist stays free and the ~2-3-tread farm
+# still cannot reach the gate.
+TUMBLE_DEFICIT_MIN_TREAD = 8
 
 
 def simple_stairs_tumble_deficit_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:

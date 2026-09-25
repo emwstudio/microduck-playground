@@ -280,26 +280,27 @@ def test_v16_tumble_deficit_logic():
 
 def test_v18_tumble_deficit_highwater_gate():
     _patch_snapshot_mdp()
-    assert ss.TUMBLE_DEFICIT_MIN_TREAD == 5
+    assert ss.TUMBLE_DEFICIT_MIN_TREAD == 8
     f = ss.simple_stairs_tumble_deficit_penalty
     # Same tumble trajectory, three episode shapes:
-    # (a) never got past tread 3 -> always free, even after sliding down.
+    # (a) never got past tread 7 (incl. the farm ceiling) -> always free,
+    # even after sliding all the way down.
     env = _StubStairEnv([[0, -1]], [1])
     assert f(env).tolist() == [0.0]
     env.episode_length_buf = torch.tensor([10])
-    env._stair.foot_last_tread = torch.tensor([[3, 2]])
+    env._stair.foot_last_tread = torch.tensor([[7, 6]])
     assert f(env).tolist() == [0.0]
     env._stair.foot_last_tread = torch.tensor([[1, -1]])
-    assert f(env).tolist() == [0.0]  # farm-style retreat: free by design
-    # (b) reached tread 5 mid-episode -> tax engages at once for its remainder.
+    assert f(env).tolist() == [0.0]  # frontier/farm slide below 8: free
+    # (b) reached tread 8 mid-episode -> tax engages at once for its remainder.
     env2 = _StubStairEnv([[0, -1]], [1])
     assert f(env2).tolist() == [0.0]
     env2.episode_length_buf = torch.tensor([10])
-    env2._stair.foot_last_tread = torch.tensor([[4, 3]])
+    env2._stair.foot_last_tread = torch.tensor([[7, 6]])
     assert f(env2).tolist() == [0.0]  # still below the gate
-    env2._stair.foot_last_tread = torch.tensor([[5, 4]])
+    env2._stair.foot_last_tread = torch.tensor([[8, 7]])
     assert f(env2).tolist() == [0.0]  # gate opens HERE, at the best itself
-    env2._stair.foot_last_tread = torch.tensor([[4, 3]])
+    env2._stair.foot_last_tread = torch.tensor([[7, 6]])
     assert f(env2).tolist() == [-1.0]  # one tread below: bleeds
     # (c) high-water 9, tumble to the floor -> the full water-mark deficit.
     env3 = _StubStairEnv([[5, 4]], [1])
