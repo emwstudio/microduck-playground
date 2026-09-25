@@ -57,6 +57,20 @@ free (foot_last_tread only moves on contact); (2) the v14 tread_stall dose
 is LIFTED while both feet are within 3 treads of the top platform
 (``_tread_stall_top_exempt``), so the TOP gate's required slow-down
 (|v| < 0.35, 0.5 s hold) is no longer taxed as a stall.
+
+v17 (single variable: the deficit's schedule).  v16 applied the w=2.0 tax
+from iteration 0 and the policy chose conservatism over exploration
+(rise_p90 2.25 vs v14's 11.3) — the official rule, empirically: any
+attempt-tax active while a hard skill is being explored makes "do nothing"
+win.  The tax is now GATED on the per-env adaptive ladder level
+(``TUMBLE_DEFICIT_MIN_LEVEL = 2``): L0-L1 is tax-free so the climb can be
+re-explored, and the price engages exactly when single-episode 5-tread
+rises are routine (there is something to lose).  The gate lives inside the
+reward, not in a global weight curriculum, because ladder_level is per-env
+adaptive — a global schedule would tax L0/L1 envs (including the 30%
+random-level draws) the moment the population mean crosses 2.  Watch:
+Curriculum/ladder_level (driver) and Episode_Reward/tumble_deficit
+(weighted effect — zero while all envs sit below L2).
 """
 
 import os
@@ -143,9 +157,23 @@ def _foot_targets_per_side(
     return torch.nan_to_num(out, nan=0.0).clamp(-5.0, 5.0)
 
 
+# v17: the deficit tax is gated on the per-env adaptive ladder level instead
+# of applying from iteration 0.  L2 (20-22 mm risers) is where single-episode
+# 5-tread rises have become routine — the first moment there is something to
+# LOSE.  L0-L1 stays tax-free so the climb can be re-explored (v16's lesson:
+# the w=2.0 tax from iteration 0 made rolling down expensive before the
+# policy could climb at all, "do nothing" won, rise_p90 collapsed 11.3 ->
+# 2.25).  A per-env gate inside the reward, not a global weight curriculum:
+# ladder_level is per-env adaptive (plus 30% random-level draws), so a
+# global schedule would tax L0/L1 envs the moment the population MEAN
+# crosses 2 — the same attempt-tax-on-beginners the rule forbids.
+TUMBLE_DEFICIT_MIN_LEVEL = 2
+
+
 def simple_stairs_tumble_deficit_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     """Self-negating cost (<= 0), in TREADS per step: the current support
-    tread minus the episode's high-water mark.
+    tread minus the episode's high-water mark, GATED on the env's current
+    ladder level (zero below TUMBLE_DEFICIT_MIN_LEVEL, v17).
 
     v16 (probe-fall-location.json): v14c's falls start at the tread 10 ->
     top-platform transition and the duck slides 2-3 risers back down for
@@ -175,7 +203,8 @@ def simple_stairs_tumble_deficit_penalty(env: ManagerBasedRlEnv) -> torch.Tensor
     state.tumble_best = torch.where(fresh, cur.clone(), state.tumble_best)
     state.tumble_best = torch.maximum(state.tumble_best, cur)
     deficit = (cur - state.tumble_best).clamp_max(0.0)
-    return torch.nan_to_num(deficit, nan=0.0).float()
+    gate = (state.level >= TUMBLE_DEFICIT_MIN_LEVEL).float()
+    return torch.nan_to_num(deficit * gate, nan=0.0).float()
 
 
 def _tread_stall_top_exempt(

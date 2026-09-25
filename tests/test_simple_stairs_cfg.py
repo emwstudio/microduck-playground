@@ -232,7 +232,7 @@ def test_warm_start_patch_resets_counters(monkeypatch):
 class _StubStairEnv:
     """Just enough env for the v16 state-driven reward functions."""
 
-    def __init__(self, last_tread, episode_buf):
+    def __init__(self, last_tread, episode_buf, level=2):
         import torch as _t
 
         n = len(last_tread)
@@ -240,7 +240,13 @@ class _StubStairEnv:
         self.device = "cpu"
         self.episode_length_buf = _t.tensor(episode_buf)
         self._stair = type(
-            "Stair", (), {"foot_last_tread": _t.tensor(last_tread), "geometry": ss.SIMPLE_STAIRS_GEOMETRY}
+            "Stair",
+            (),
+            {
+                "foot_last_tread": _t.tensor(last_tread),
+                "geometry": ss.SIMPLE_STAIRS_GEOMETRY,
+                "level": _t.full((n,), level, dtype=_t.long),
+            },
         )()
 
 
@@ -270,6 +276,22 @@ def test_v16_tumble_deficit_logic():
     env.episode_length_buf = torch.tensor([1])
     env._stair.foot_last_tread = torch.tensor([[0, -1]])
     assert f(env).tolist() == [0.0]
+
+
+def test_v17_tumble_deficit_level_gate():
+    _patch_snapshot_mdp()
+    assert ss.TUMBLE_DEFICIT_MIN_LEVEL == 2
+    f = ss.simple_stairs_tumble_deficit_penalty
+    # Same tumble (best 8, both feet on the floor), three level bands:
+    # L0/L1 -> tax-free (exploration), L2 -> the full deficit.
+    for level, expect in ((0, 0.0), (1, 0.0), (2, -9.0), (4, -9.0)):
+        env = _StubStairEnv([[5, 4]], [1], level=level)
+        assert f(env).tolist() == [0.0]  # latch at spawn
+        env.episode_length_buf = torch.tensor([10])
+        env._stair.foot_last_tread = torch.tensor([[8, 7]])
+        assert f(env).tolist() == [0.0]  # climb to the high-water mark
+        env._stair.foot_last_tread = torch.tensor([[-1, -1]])
+        assert f(env).tolist() == [expect], level
 
 
 def test_v16_tread_stall_top_exemption(monkeypatch):
