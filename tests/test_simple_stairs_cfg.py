@@ -224,3 +224,82 @@ def test_warm_start_patch_resets_counters(monkeypatch):
     MjlabOnPolicyRunner.load(r, "model_3998.pt")
     assert r.env.unwrapped.common_step_counter == 96000
     assert r.current_learning_iteration == 3998
+
+
+# --- v16: tumble deficit + top-exempt stall -------------------------------------
+
+
+class _StubStairEnv:
+    """Just enough env for the v16 state-driven reward functions."""
+
+    def __init__(self, last_tread, episode_buf):
+        import torch as _t
+
+        n = len(last_tread)
+        self.num_envs = n
+        self.device = "cpu"
+        self.episode_length_buf = _t.tensor(episode_buf)
+        self._stair = type(
+            "Stair", (), {"foot_last_tread": _t.tensor(last_tread), "geometry": ss.SIMPLE_STAIRS_GEOMETRY}
+        )()
+
+
+def test_v16_tumble_deficit_logic():
+    _patch_snapshot_mdp()  # _stair_state lives in the snapshot mdp
+    f = ss.simple_stairs_tumble_deficit_penalty
+    # Episode start on tread 5: latch at the spawn, no charge.
+    env = _StubStairEnv([[5, 4]], [1])
+    assert f(env).tolist() == [0.0]
+    # Mid-episode from here on (fresh re-latch only fires at episode start).
+    env.episode_length_buf = torch.tensor([10])
+    # Climbing to 8 never pays a deficit.
+    env._stair.foot_last_tread = torch.tensor([[8, 7]])
+    assert f(env).tolist() == [0.0]
+    # Crouch / bobbing on the same treads: free.
+    assert f(env).tolist() == [0.0]
+    # One foot still holding the high point: free (max over feet).
+    env._stair.foot_last_tread = torch.tensor([[8, 6]])
+    assert f(env).tolist() == [0.0]
+    # Both feet down a tread: bleed exactly one tread per step.
+    env._stair.foot_last_tread = torch.tensor([[7, 6]])
+    assert f(env).tolist() == [-1.0]
+    # Tumbling to the floor from a best of 8: -(8 - (-1)) = -9.
+    env._stair.foot_last_tread = torch.tensor([[-1, -1]])
+    assert f(env).tolist() == [-9.0]
+    # Next episode re-latches: no bleed from the old high-water mark.
+    env.episode_length_buf = torch.tensor([1])
+    env._stair.foot_last_tread = torch.tensor([[0, -1]])
+    assert f(env).tolist() == [0.0]
+
+
+def test_v16_tread_stall_top_exemption(monkeypatch):
+    import torch as _t
+    from types import SimpleNamespace
+
+    fake_mdp = SimpleNamespace(
+        ladder_tread_stall_penalty=lambda env, stall_s=4.0: _t.full((env.num_envs,), -1.0),
+        _stair_state=lambda env: env._stair,
+    )
+    monkeypatch.setattr(ss, "microduck_mdp", fake_mdp)
+    wrapper = ss._tread_stall_top_exempt
+    # treads (7, 8): below the zone -> the v14 dose fires.
+    assert wrapper(_StubStairEnv([[7, 8]], [100])).tolist() == [-1.0]
+    # treads (9, 10): both within 3 of the top (num_treads - 3 = 9) -> exempt.
+    assert wrapper(_StubStairEnv([[9, 10]], [100])).tolist() == [0.0]
+    # one foot back on the floor: not exempt.
+    assert wrapper(_StubStairEnv([[9, -1]], [100])).tolist() == [-1.0]
+
+
+def test_v16_cfg_terms_and_ladder_unchanged():
+    _patch_snapshot_mdp()
+    cfg = ss.make_microduck_simple_stairs_env_cfg()
+    assert cfg.rewards["tumble_deficit"].weight == 2.0
+    assert cfg.rewards["tumble_deficit"].func is ss.simple_stairs_tumble_deficit_penalty
+    assert cfg.rewards["tread_stall"].func is ss._tread_stall_top_exempt
+    assert cfg.rewards["tread_stall"].weight == 1.0
+    assert cfg.rewards["tread_stall"].params["stall_s"] == 4.0
+    from mjlab_microduck.tasks import microduck_ladder_env_cfg as ladder_mod
+
+    ladder_cfg = ladder_mod.make_microduck_ladder_env_cfg()
+    assert "tumble_deficit" not in ladder_cfg.rewards
+    assert "tread_stall" not in ladder_cfg.rewards

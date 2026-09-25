@@ -47,12 +47,24 @@ iteration restart at 0, weights/normalizer/optimizer kept) plus
 MICRODUCK_SIMPLE_STAIRS_START_LEVEL=3 (one-shot level seed — the loaded
 policy consolidated at mean level ~3.2, so the curriculum resumes near its
 level instead of re-proving L0).  Rewards untouched for attribution.
+
+v16 (probe-fall-location.json: 78-81 % of falls start at the tread 10 ->
+top transition, then slide 2-3 risers down for free).  Two reward patches,
+everything else kept from v14/v15: (1) ``tumble_deficit`` — a tread-
+quantized high-water deficit (self-negating, weight 2.0) so every step
+spent below the episode's best tread bleeds, while crouches/bobbing stay
+free (foot_last_tread only moves on contact); (2) the v14 tread_stall dose
+is LIFTED while both feet are within 3 treads of the top platform
+(``_tread_stall_top_exempt``), so the TOP gate's required slow-down
+(|v| < 0.35, 0.5 s hold) is no longer taxed as a stall.
 """
 
 import os
 from copy import deepcopy
 
-from mjlab.envs import ManagerBasedRlEnvCfg
+import torch
+
+from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from mjlab.managers import CurriculumTermCfg, EventTermCfg, RewardTermCfg
 
 from ..robot.ladder import StairLadderGeometry
@@ -131,6 +143,67 @@ def _foot_targets_per_side(
     return torch.nan_to_num(out, nan=0.0).clamp(-5.0, 5.0)
 
 
+def simple_stairs_tumble_deficit_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Self-negating cost (<= 0), in TREADS per step: the current support
+    tread minus the episode's high-water mark.
+
+    v16 (probe-fall-location.json): v14c's falls start at the tread 10 ->
+    top-platform transition and the duck slides 2-3 risers back down for
+    free — upward_progress pays per metre climbed, but a tumble only loses
+    the truncated future, so "climb 10, fall off" was a fine episode.  Every
+    step spent below the high-water mark now bleeds.  Tread quantization is
+    what keeps normal climbing free: ``foot_last_tread`` only moves on tread
+    CONTACT, so crouches and CoM bobbing between steps never pay; only
+    genuinely landing on a lower tread (or the floor, -1) registers.  A hold
+    episode or a stand at the best tread pays exactly zero.  At weight 2.0 a
+    2-3-riser slide costs ~-40 to -90 across the tumble, against the
+    ~+16-25 a riser earns from upward_progress — losing ground costs several
+    times what gaining it paid, while a failed attempt still stays
+    net-positive over parking (the attempt is not made fatal, just
+    unprofitable vs finishing).
+    """
+    n, dev = env.num_envs, env.device
+    state = microduck_mdp._stair_state(env)
+    if state is None or not hasattr(state, "foot_last_tread"):
+        return torch.zeros(n, device=dev)
+    cur = state.foot_last_tread.max(dim=1).values  # highest tread either foot last stood on (-1 = floor)
+    if not hasattr(state, "tumble_best"):
+        state.tumble_best = cur.clone()
+    # Re-latch at episode start so the previous episode's high-water mark
+    # cannot bleed into the new one (same fresh pattern as the stall term).
+    fresh = env.episode_length_buf <= 1
+    state.tumble_best = torch.where(fresh, cur.clone(), state.tumble_best)
+    state.tumble_best = torch.maximum(state.tumble_best, cur)
+    deficit = (cur - state.tumble_best).clamp_max(0.0)
+    return torch.nan_to_num(deficit, nan=0.0).float()
+
+
+def _tread_stall_top_exempt(
+    env: ManagerBasedRlEnv,
+    stall_s: float = 4.0,
+    exempt_below_top: int = 3,
+) -> torch.Tensor:
+    """ladder_tread_stall_penalty with a top-approach exemption (v16).
+
+    The TOP success gate requires slowing to |v| < 0.35 m/s and holding 0.5 s
+    at the platform edge — the 4 s stall window punishes exactly that
+    deceleration (probe: falls start at the 10 -> top transition carrying
+    speed).  While BOTH feet's last tread is within ``exempt_below_top`` of
+    the top platform (treads >= num_treads - 3 = 9 on simple_stairs), the
+    stall price is lifted so the finish may be taken carefully; everywhere
+    else the v14 dose applies unchanged.  Residual risk to watch: a free
+    park on treads 9-10 (if it emerges, tighten the zone to >= 10 rather
+    than raising the dose).
+    """
+    base = microduck_mdp.ladder_tread_stall_penalty(env, stall_s=stall_s)
+    state = microduck_mdp._stair_state(env)
+    if state is None or not hasattr(state, "foot_last_tread"):
+        return base
+    exempt_tread = state.geometry.num_treads - exempt_below_top
+    near_top = (state.foot_last_tread >= exempt_tread).all(dim=1)
+    return base * (~near_top).float()
+
+
 def _seed_start_level(env, env_ids, geometry, level: int) -> None:
     """One-shot curriculum-level seed for warm starts (v15).
 
@@ -190,9 +263,17 @@ def make_microduck_simple_stairs_env_cfg(
     # the park's income stays ~0.54/step vs the -1.0/step price — still a 2x
     # kill — but an unlucky steady pause is no longer fatal.
     cfg.rewards["tread_stall"] = RewardTermCfg(
-        func=microduck_mdp.ladder_tread_stall_penalty,
+        func=_tread_stall_top_exempt,  # v16: lifted while both feet are within 3 of the top
         weight=1.0,
         params={"stall_s": 4.0},
+    )
+    # v16: make rolling back down the stairs expensive.  See the function
+    # docstring for the mechanism (tread-quantized high-water deficit) and
+    # the weight rationale: 2.0 x (treads below the episode best) per step,
+    # several times the ~+16-25 a riser earns, attempts stay non-fatal.
+    cfg.rewards["tumble_deficit"] = RewardTermCfg(
+        func=simple_stairs_tumble_deficit_penalty,
+        weight=2.0,
     )
     # v13 F2: let the natural step fit under the overshoot ceiling.  With
     # same_side_spacing=1 the ceiling is support + riser + 3 mm + clearance =
