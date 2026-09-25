@@ -278,20 +278,37 @@ def test_v16_tumble_deficit_logic():
     assert f(env).tolist() == [0.0]
 
 
-def test_v17_tumble_deficit_level_gate():
+def test_v18_tumble_deficit_highwater_gate():
     _patch_snapshot_mdp()
-    assert ss.TUMBLE_DEFICIT_MIN_LEVEL == 2
+    assert ss.TUMBLE_DEFICIT_MIN_TREAD == 5
     f = ss.simple_stairs_tumble_deficit_penalty
-    # Same tumble (best 8, both feet on the floor), three level bands:
-    # L0/L1 -> tax-free (exploration), L2 -> the full deficit.
-    for level, expect in ((0, 0.0), (1, 0.0), (2, -9.0), (4, -9.0)):
-        env = _StubStairEnv([[5, 4]], [1], level=level)
-        assert f(env).tolist() == [0.0]  # latch at spawn
-        env.episode_length_buf = torch.tensor([10])
-        env._stair.foot_last_tread = torch.tensor([[8, 7]])
-        assert f(env).tolist() == [0.0]  # climb to the high-water mark
-        env._stair.foot_last_tread = torch.tensor([[-1, -1]])
-        assert f(env).tolist() == [expect], level
+    # Same tumble trajectory, three episode shapes:
+    # (a) never got past tread 3 -> always free, even after sliding down.
+    env = _StubStairEnv([[0, -1]], [1])
+    assert f(env).tolist() == [0.0]
+    env.episode_length_buf = torch.tensor([10])
+    env._stair.foot_last_tread = torch.tensor([[3, 2]])
+    assert f(env).tolist() == [0.0]
+    env._stair.foot_last_tread = torch.tensor([[1, -1]])
+    assert f(env).tolist() == [0.0]  # farm-style retreat: free by design
+    # (b) reached tread 5 mid-episode -> tax engages at once for its remainder.
+    env2 = _StubStairEnv([[0, -1]], [1])
+    assert f(env2).tolist() == [0.0]
+    env2.episode_length_buf = torch.tensor([10])
+    env2._stair.foot_last_tread = torch.tensor([[4, 3]])
+    assert f(env2).tolist() == [0.0]  # still below the gate
+    env2._stair.foot_last_tread = torch.tensor([[5, 4]])
+    assert f(env2).tolist() == [0.0]  # gate opens HERE, at the best itself
+    env2._stair.foot_last_tread = torch.tensor([[4, 3]])
+    assert f(env2).tolist() == [-1.0]  # one tread below: bleeds
+    # (c) high-water 9, tumble to the floor -> the full water-mark deficit.
+    env3 = _StubStairEnv([[5, 4]], [1])
+    assert f(env3).tolist() == [0.0]
+    env3.episode_length_buf = torch.tensor([10])
+    env3._stair.foot_last_tread = torch.tensor([[9, 8]])
+    assert f(env3).tolist() == [0.0]
+    env3._stair.foot_last_tread = torch.tensor([[-1, -1]])
+    assert f(env3).tolist() == [-10.0]  # -(9 - (-1))
 
 
 def test_v16_tread_stall_top_exemption(monkeypatch):

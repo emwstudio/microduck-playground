@@ -62,15 +62,21 @@ v17 (single variable: the deficit's schedule).  v16 applied the w=2.0 tax
 from iteration 0 and the policy chose conservatism over exploration
 (rise_p90 2.25 vs v14's 11.3) — the official rule, empirically: any
 attempt-tax active while a hard skill is being explored makes "do nothing"
-win.  The tax is now GATED on the per-env adaptive ladder level
-(``TUMBLE_DEFICIT_MIN_LEVEL = 2``): L0-L1 is tax-free so the climb can be
-re-explored, and the price engages exactly when single-episode 5-tread
-rises are routine (there is something to lose).  The gate lives inside the
-reward, not in a global weight curriculum, because ladder_level is per-env
-adaptive — a global schedule would tax L0/L1 envs (including the 30%
-random-level draws) the moment the population mean crosses 2.  Watch:
-Curriculum/ladder_level (driver) and Episode_Reward/tumble_deficit
-(weighted effect — zero while all envs sit below L2).
+win.  The tax was gated on the per-env adaptive ladder level (L0-L1 free,
+L2+ full).
+
+v18 (single variable: the gate condition).  The v17 level gate deadlocked:
+in the tax-free L0-L1 zone "climb 2 and retreat" was the free optimum (the
+v12 retreat farm resurrected at 0.42), so no env ever reached L2 and the
+tax never engaged — exploration-tax again, this time via the farm eating
+the free zone.  The gate now keys on the EPISODE'S OWN high-water mark
+(``TUMBLE_DEFICIT_MIN_TREAD = 5``): once this episode has stood on tread 5
+the tax is on for its remainder (finish pressure arrives with the first
+success); episodes that never got high stay free to explore.  5 is the
+waist the ~2-3-tread farm cannot touch but any breakthrough (v14 p90 = 11)
+must pass.  Watch: Episode_Reward/tumble_deficit (weighted effect — zero
+in low episodes, negative in high ones) and swing_retreated_fraction
+(the farm signature; should not rise).
 """
 
 import os
@@ -157,23 +163,26 @@ def _foot_targets_per_side(
     return torch.nan_to_num(out, nan=0.0).clamp(-5.0, 5.0)
 
 
-# v17: the deficit tax is gated on the per-env adaptive ladder level instead
-# of applying from iteration 0.  L2 (20-22 mm risers) is where single-episode
-# 5-tread rises have become routine — the first moment there is something to
-# LOSE.  L0-L1 stays tax-free so the climb can be re-explored (v16's lesson:
-# the w=2.0 tax from iteration 0 made rolling down expensive before the
-# policy could climb at all, "do nothing" won, rise_p90 collapsed 11.3 ->
-# 2.25).  A per-env gate inside the reward, not a global weight curriculum:
-# ladder_level is per-env adaptive (plus 30% random-level draws), so a
-# global schedule would tax L0/L1 envs the moment the population MEAN
-# crosses 2 — the same attempt-tax-on-beginners the rule forbids.
-TUMBLE_DEFICIT_MIN_LEVEL = 2
+# v18: the deficit tax is gated on the EPISODE'S OWN high-water mark instead
+# of the adaptive ladder level.  The v17 level gate deadlocked: in the
+# tax-free L0-L1 zone "climb 2, retreat" was the free optimum (the v12
+# retreat farm resurrected at 0.42), so no env ever reached L2 and the tax
+# never engaged.  Gating on per-episode performance instead: once THIS
+# episode has stood on tread >= 5 the tax is on for its remainder (the
+# finish pressure arrives with the first success); episodes that never got
+# high stay free to explore.  Threshold 5: the v14 farm's ceiling was ~2-3
+# treads, so farm episodes never pay (they also never amount to anything —
+# acceptable), while an ignition trajectory (v14 p90 reaching 11) crosses 5
+# on the way up — 5 is the waist the farm cannot touch but any breakthrough
+# must pass.  A mid-episode latch means the tax engages the moment the duck
+# first stands on tread 5, not at the next reset.
+TUMBLE_DEFICIT_MIN_TREAD = 5
 
 
 def simple_stairs_tumble_deficit_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     """Self-negating cost (<= 0), in TREADS per step: the current support
-    tread minus the episode's high-water mark, GATED on the env's current
-    ladder level (zero below TUMBLE_DEFICIT_MIN_LEVEL, v17).
+    tread minus the episode's high-water mark, GATED on that same mark
+    (zero until the episode has stood on TUMBLE_DEFICIT_MIN_TREAD, v18).
 
     v16 (probe-fall-location.json): v14c's falls start at the tread 10 ->
     top-platform transition and the duck slides 2-3 risers back down for
@@ -203,7 +212,7 @@ def simple_stairs_tumble_deficit_penalty(env: ManagerBasedRlEnv) -> torch.Tensor
     state.tumble_best = torch.where(fresh, cur.clone(), state.tumble_best)
     state.tumble_best = torch.maximum(state.tumble_best, cur)
     deficit = (cur - state.tumble_best).clamp_max(0.0)
-    gate = (state.level >= TUMBLE_DEFICIT_MIN_LEVEL).float()
+    gate = (state.tumble_best >= TUMBLE_DEFICIT_MIN_TREAD).float()
     return torch.nan_to_num(deficit * gate, nan=0.0).float()
 
 
