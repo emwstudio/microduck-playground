@@ -305,9 +305,18 @@ def make_microduck_simple_stairs_env_cfg(
     # nose — the open-riser mini-tread gaps are untouched.  Read at factory
     # time so train AND play/eval share it (this one is meant to be
     # measured in eval); SIMPLE_STAIRS_NOSE_BEVEL_M=0 restores the wall.
+    # Landing setback (2026-09-26, user found the real culprit): the ladder
+    # family parks the landing 30 mm back from the regular tread spacing so
+    # the swing foot clears its riser wall at ~60 deg.  On our 20 deg open-
+    # riser stairs that setback + the ~9 mm tread gap leaves a ~39 mm chasm
+    # before the top platform — the "different last step" the duck kept
+    # falling into (probe: 78-81% of falls at tread 10->11).  Default 0 here:
+    # the platform butts to the regular ~9 mm open-riser gap, same as every
+    # other step.  SIMPLE_STAIRS_LANDING_SETBACK_M restores any value.
     geometry = replace(
         SIMPLE_STAIRS_GEOMETRY,
         landing_nose_bevel_m=float(os.getenv("SIMPLE_STAIRS_NOSE_BEVEL_M", "0.025")),
+        landing_setback_m=float(os.getenv("SIMPLE_STAIRS_LANDING_SETBACK_M", "0.0")),
     )
     cfg = make_microduck_ladder_env_cfg(
         play=play,
