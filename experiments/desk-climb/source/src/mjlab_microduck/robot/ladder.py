@@ -138,6 +138,12 @@ class StairLadderGeometry:
     # from two treads below the reach is too long and the toe catches the
     # landing's nose (s18 dive trace, 2026-09-04).
     landing_step_gate: bool = False
+    # Beveled landing nose (simple_stairs, 2026-09-26): > 0 adds a triangular
+    # wedge in front of the landing's down-stairs face (see _landing_spec),
+    # turning the slab wall into a ramp so a duck that pitches into the nose
+    # rides up onto the platform instead of bouncing back down.  0.0 keeps
+    # the plain box everywhere (ladder family zero-change).
+    landing_nose_bevel_m: float = 0.0
     # Fixed staircase (demo): explicit flight frames relative to flight 0
     # (offsets (F, 2) in flight-0 coordinates, yaws (F,) relative to flight 0)
     # and per-landing convex polygons ((u, v) in the landing's flight frame,
@@ -351,12 +357,7 @@ def make_tread_spec(geometry: StairLadderGeometry, index: int) -> mujoco.MjSpec:
             geometry.tread_friction,
         )
     if geometry.is_landing(index):
-        return _box_spec(
-            "tread",
-            (0.5 * geometry.landing_depth_m, 0.5 * geometry.landing_width_m, 0.5 * geometry.landing_thickness_m),
-            "0.62 0.48 0.30 1",
-            geometry.tread_friction,
-        )
+        return _landing_spec(geometry)
     rgba = "0.80 0.62 0.32 1" if geometry.tread_side(index) >= 0 else "0.70 0.52 0.26 1"
     return _box_spec(
         "tread",
@@ -364,6 +365,54 @@ def make_tread_spec(geometry: StairLadderGeometry, index: int) -> mujoco.MjSpec:
         rgba,
         geometry.tread_friction,
     )
+
+
+def _landing_spec(geometry: StairLadderGeometry) -> mujoco.MjSpec:
+    """Landing (top platform) box, optionally with a beveled nose.
+
+    ``landing_nose_bevel_m`` > 0 adds a triangular-prism wedge in front of
+    the box's down-stairs face: a ramp rising from the slab's bottom edge to
+    its top over ``bevel`` horizontally (the 0.025 default rises the 20 mm
+    slab at ~39 deg).  A duck that pitches into the nose rides up the ramp
+    onto the platform instead of bouncing back down the stairs (v14c,
+    probe-fall-location.json: 78-81 % of falls start at the tread 10 -> top
+    transition, face-first into the 20 mm slab + 25 mm riser wall).  Only
+    the landing's nose is touched — the open-riser gap logic of the mini
+    treads is unaffected, and the wedge lives in the SAME mocap body as the
+    box so contacts classify as contacts with the landing tread
+    (entity-prefixed geom name ``tread_XX/nose_bevel``).  Default 0.0: the
+    spec is exactly the plain box (ladder family unchanged).
+    """
+    spec = _box_spec(
+        "tread",
+        (0.5 * geometry.landing_depth_m, 0.5 * geometry.landing_width_m, 0.5 * geometry.landing_thickness_m),
+        "0.62 0.48 0.30 1",
+        geometry.tread_friction,
+    )
+    bevel = float(getattr(geometry, "landing_nose_bevel_m", 0.0))
+    if bevel <= 0.0:
+        return spec
+    hd = 0.5 * geometry.landing_depth_m
+    hw = 0.5 * geometry.landing_width_m
+    ht = 0.5 * geometry.landing_thickness_m
+    # Triangular prism: bottom edge at the nose base (slab bottom), rising to
+    # the nose top; extruded across the full platform width.  Six vertices —
+    # the convex hull is the wedge (same uservert pattern as _prism_spec).
+    verts = []
+    for y in (-hw, hw):
+        verts += ((-hd - bevel, y, -ht), (-hd, y, -ht), (-hd, y, ht))
+    mesh = spec.add_mesh(name="nose_bevel_mesh")
+    mesh.uservert = [c for v in verts for c in v]
+    geom = spec.body("tread").add_geom(
+        name="nose_bevel", type=mujoco.mjtGeom.mjGEOM_MESH, meshname="nose_bevel_mesh"
+    )
+    geom.friction = [geometry.tread_friction, 0.005, 0.0001]
+    geom.condim = 3
+    geom.priority = 1
+    geom.solref = [TREAD_SOLREF_TIMECONST_S, 1.0]
+    geom.solimp = [0.95, 0.99, 0.001, 0.5, 2.0]
+    geom.rgba = [0.66, 0.52, 0.34, 1]
+    return spec
 
 
 def make_rail_spec(geometry: StairLadderGeometry) -> mujoco.MjSpec:

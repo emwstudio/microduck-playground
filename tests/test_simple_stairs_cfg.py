@@ -343,3 +343,52 @@ def test_v16_cfg_terms_and_ladder_unchanged():
     ladder_cfg = ladder_mod.make_microduck_ladder_env_cfg()
     assert "tumble_deficit" not in ladder_cfg.rewards
     assert "tread_stall" not in ladder_cfg.rewards
+
+
+# --- beveled landing nose (2026-09-26) ------------------------------------------
+
+
+def test_landing_nose_bevel_geometry():
+    import dataclasses
+
+    import mujoco
+
+    g_plain = lad.StairLadderGeometry(num_treads=12, alternating=False, tread_depth_m=0.060, landing_every=12)
+    # Family default: no bevel, and the landing spec is exactly today's plain box.
+    assert g_plain.landing_nose_bevel_m == 0.0
+    spec = lad.make_tread_spec(g_plain, 11)
+    assert len(spec.body("tread").geoms) == 1
+    g_bevel = dataclasses.replace(g_plain, landing_nose_bevel_m=0.025)
+    spec = lad.make_tread_spec(g_bevel, 11)
+    geoms = spec.body("tread").geoms
+    assert len(geoms) == 2
+    assert geoms[1].type == mujoco.mjtGeom.mjGEOM_MESH
+    assert geoms[1].name == "nose_bevel"  # contact-classifies as the landing tread
+    model = spec.compile()  # builds cleanly
+    assert model.ngeom == 2
+    # Non-landing treads are untouched by the bevel field.
+    assert len(lad.make_tread_spec(g_bevel, 5).body("tread").geoms) == 1
+    # Clearance logic is unaffected by the new field.
+    lad.validate_tread_clearance(g_bevel, 0.025, 20.0, open_riser=True)
+    riser, angle = lad.clamp_riser_angle(g_bevel, *_f64(0.025, 19.0), open_riser=True)
+    assert float(riser) == pytest.approx(0.025)
+    assert float(angle) == pytest.approx(19.0)
+    # The alternating ladder family's landing spec is unchanged (default 0).
+    from mjlab_microduck.tasks import microduck_ladder_env_cfg as _ladder_cfg_mod
+
+    assert len(lad.make_tread_spec(_ladder_cfg_mod.STAIRCASE_GEOMETRY, 7).body("tread").geoms) == 1
+
+
+def test_simple_stairs_bevel_switch(monkeypatch):
+    _patch_snapshot_mdp()
+    # Default: the 0.025 m wedge is on, in train and play alike.
+    for play in (False, True):
+        cfg = ss.make_microduck_simple_stairs_env_cfg(play=play)
+        geo = cfg.events["reset_stair_ladder"].params["geometry"]
+        assert geo.landing_nose_bevel_m == pytest.approx(0.025)
+    # Env override restores the wall; the seed event carries the same geometry.
+    monkeypatch.setenv("SIMPLE_STAIRS_NOSE_BEVEL_M", "0.0")
+    monkeypatch.setenv("MICRODUCK_SIMPLE_STAIRS_START_LEVEL", "3")
+    cfg = ss.make_microduck_simple_stairs_env_cfg()
+    assert cfg.events["reset_stair_ladder"].params["geometry"].landing_nose_bevel_m == 0.0
+    assert cfg.events["seed_start_level"].params["geometry"].landing_nose_bevel_m == 0.0

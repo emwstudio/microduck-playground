@@ -85,10 +85,20 @@ probe-fall-location.json): the 5-7 waist is free to charge through, the
 Episode_Reward/tumble_deficit (weighted effect — zero below 8, negative
 above), swing_retreated_fraction (farm signature; must not rise), and
 rise_p90 (must recover toward v14's 11 — the 5-7 frontier is free again).
+
+Beveled nose (2026-09-26, the Hannes route — the getup relay needs the
+duck to END UP on the deck, not bouncing off it): the probe shows 78-81 %
+of falls start at the tread 10 -> top transition, face-first into the top
+slab's 20 mm side wall above the 25 mm riser.  ``landing_nose_bevel_m``
+(default 0.025 via SIMPLE_STAIRS_NOSE_BEVEL_M, factory-time so train and
+play/eval share it) replaces that wall with a triangular ramp at the top
+platform's nose; the mini-tread open-riser gaps are untouched.  Set the
+env var to 0 to restore the wall for A/B.
 """
 
 import os
 from copy import deepcopy
+from dataclasses import replace
 
 import torch
 
@@ -288,9 +298,20 @@ def make_microduck_simple_stairs_env_cfg(
         top_approach_prob = 0.0 if play else 0.35
     if start_level is None:
         start_level = int(os.getenv("MICRODUCK_SIMPLE_STAIRS_START_LEVEL", "0"))
+    # Beveled top-platform nose (2026-09-26, the Hannes route): the probe-
+    # proven crash wall is the top slab's 20 mm face above the 25 mm riser;
+    # a 25 mm wedge turns it into a ramp so a forward pitch rides up onto
+    # the deck instead of bouncing back downstairs.  Only the top landing's
+    # nose — the open-riser mini-tread gaps are untouched.  Read at factory
+    # time so train AND play/eval share it (this one is meant to be
+    # measured in eval); SIMPLE_STAIRS_NOSE_BEVEL_M=0 restores the wall.
+    geometry = replace(
+        SIMPLE_STAIRS_GEOMETRY,
+        landing_nose_bevel_m=float(os.getenv("SIMPLE_STAIRS_NOSE_BEVEL_M", "0.025")),
+    )
     cfg = make_microduck_ladder_env_cfg(
         play=play,
-        geometry=SIMPLE_STAIRS_GEOMETRY,
+        geometry=geometry,
         level_table=SIMPLE_STAIRS_LEVELS,
         episode_length_s=SIMPLE_STAIRS_EPISODE_LENGTH_S,
         max_start_tread=8,
@@ -356,7 +377,7 @@ def make_microduck_simple_stairs_env_cfg(
             "seed_start_level": EventTermCfg(
                 func=_seed_start_level,
                 mode="reset",
-                params={"geometry": SIMPLE_STAIRS_GEOMETRY, "level": start_level},
+                params={"geometry": geometry, "level": start_level},
             ),
             **cfg.events,
         }
