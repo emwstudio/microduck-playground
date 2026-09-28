@@ -332,7 +332,7 @@ def make_microduck_simple_stairs_env_cfg(
         landing_table_leg_radius_m=(
             0.0075 if os.getenv("SIMPLE_STAIRS_TABLE_LEGS", "1") == "1" else 0.0
         ),
-        rail_overhang_m=float(os.getenv("SIMPLE_STAIRS_RAIL_OVERHANG_M", "0.12")),
+        rail_overhang_m=float(os.getenv("SIMPLE_STAIRS_RAIL_OVERHANG_M", "0.0")),
     )
     cfg = make_microduck_ladder_env_cfg(
         play=play,

@@ -445,17 +445,18 @@ def test_table_legs_and_rail_overhang(monkeypatch):
     s0 = float(lad.make_rail_spec(g).body("rail").geoms[0].size[2])
     s1 = float(lad.make_rail_spec(g_oh).body("rail").geoms[0].size[2])
     assert s1 == pytest.approx(s0)
-    # simple_stairs switches: default ON, env-off restores stock.
+    # simple_stairs switches: table legs default ON, rail overhang default OFF
+    # (user 2026-09-28: the two desk-top sticks read as broken); env toggles invert.
     _patch_snapshot_mdp()
     cfg = ss.make_microduck_simple_stairs_env_cfg()
     geo = cfg.events["reset_stair_ladder"].params["geometry"]
     assert geo.landing_table_leg_radius_m == pytest.approx(0.0075)
-    assert geo.rail_overhang_m == pytest.approx(0.12)
+    assert geo.rail_overhang_m == 0.0
     monkeypatch.setenv("SIMPLE_STAIRS_TABLE_LEGS", "0")
-    monkeypatch.setenv("SIMPLE_STAIRS_RAIL_OVERHANG_M", "0.0")
+    monkeypatch.setenv("SIMPLE_STAIRS_RAIL_OVERHANG_M", "0.12")
     geo = ss.make_microduck_simple_stairs_env_cfg().events["reset_stair_ladder"].params["geometry"]
     assert geo.landing_table_leg_radius_m == 0.0
-    assert geo.rail_overhang_m == 0.0
+    assert geo.rail_overhang_m == pytest.approx(0.12)
 
 
 # --- walk-on relay helpers --------------------------------------------------------
