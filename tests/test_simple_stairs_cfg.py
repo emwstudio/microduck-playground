@@ -379,6 +379,25 @@ def test_landing_nose_bevel_geometry():
     assert len(lad.make_tread_spec(_ladder_cfg_mod.STAIRCASE_GEOMETRY, 7).body("tread").geoms) == 1
 
 
+def test_landing_flush_geometry():
+    from mjlab_microduck.robot import ladder as lad
+    import torch
+
+    g_plain = lad.StairLadderGeometry(num_treads=12, alternating=False, landing_every=12)
+    import dataclasses
+    g_flush = dataclasses.replace(g_plain, landing_flush=True)
+    riser = torch.full((2,), 0.025)
+    top_plain = lad.tread_top_heights_geom(g_plain, riser)
+    top_flush = lad.tread_top_heights_geom(g_flush, riser)
+    # Ladder family default: flush off — landing top stays one riser up.
+    assert top_plain[0, 11].item() == pytest.approx(12 * 0.025)
+    # Flush: landing top continues the previous tread's level; others untouched.
+    assert top_flush[0, 11].item() == pytest.approx(top_flush[0, 10].item())
+    assert top_flush[0, 10].item() == pytest.approx(top_plain[0, 10].item())
+    # (mesh placement is mocap/reset-time; the height function above is what
+    # drives both the box z and the nose-x pullback via (top - z_base)/tan.)
+
+
 def test_simple_stairs_bevel_switch(monkeypatch):
     _patch_snapshot_mdp()
     # Default (2026-09-28): bevel off — the flush landing join was the real

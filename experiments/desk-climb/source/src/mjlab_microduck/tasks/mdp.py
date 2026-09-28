@@ -729,7 +729,7 @@ def reset_stair_ladder(
     # one-run, one-riser stagger.
     both_on_landing = (start_is_landing & (flat >= 0.075)) | start_is_top
     on_landing = both_on_landing
-    tops_all = _ladder.tread_top_heights(riser, geometry.num_treads)
+    tops_all = _ladder.tread_top_heights_geom(geometry, riser)
     top_k = tops_all.gather(1, start[:, None]).squeeze(1)
     # Flight of the spawn tread and its base height / x offset from x0.  A
     # landing spawn is expressed in the *next* flight's frame.

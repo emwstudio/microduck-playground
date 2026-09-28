@@ -317,6 +317,12 @@ def make_microduck_simple_stairs_env_cfg(
         SIMPLE_STAIRS_GEOMETRY,
         landing_nose_bevel_m=float(os.getenv("SIMPLE_STAIRS_NOSE_BEVEL_M", "0.0")),
         landing_setback_m=float(os.getenv("SIMPLE_STAIRS_LANDING_SETBACK_M", "0.0")),
+        # Ladder-leaning-on-desk (user 2026-09-28): the top platform's top
+        # continues the last mini tread's level and butts against it — the
+        # top-out is a flat walk-on, not a step up over a nose.  The duck
+        # walks the stairs, walks onto the deck, and only then runs out of
+        # stairs.  SIMPLE_STAIRS_LANDING_FLUSH=0 restores the riser.
+        landing_flush=os.getenv("SIMPLE_STAIRS_LANDING_FLUSH", "1") == "1",
     )
     cfg = make_microduck_ladder_env_cfg(
         play=play,

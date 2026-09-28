@@ -144,6 +144,13 @@ class StairLadderGeometry:
     # rides up onto the platform instead of bouncing back down.  0.0 keeps
     # the plain box everywhere (ladder family zero-change).
     landing_nose_bevel_m: float = 0.0
+    # Flush landing ("ladder leaning on the desk", user 2026-09-28): the
+    # landing's top CONTINUES the previous tread's level instead of sitting
+    # one riser up.  The negative (top - z_base)/tan term pulls the box one
+    # run back as well, so the deck butts against the last mini tread with
+    # zero gap and zero riser — the top-out becomes a flat walk-on.
+    # Default False: ladder/staircase/floor_desk families untouched.
+    landing_flush: bool = False
     # Fixed staircase (demo): explicit flight frames relative to flight 0
     # (offsets (F, 2) in flight-0 coordinates, yaws (F,) relative to flight 0)
     # and per-landing convex polygons ((u, v) in the landing's flight frame,
@@ -479,6 +486,21 @@ def tread_top_heights(riser: torch.Tensor, num_treads: int) -> torch.Tensor:
     return riser[:, None] * index[None, :]
 
 
+def tread_top_heights_geom(geometry: "StairLadderGeometry", riser: torch.Tensor) -> torch.Tensor:
+    """tread_top_heights with the flush-landing option: a flush landing's top
+    continues the previous tread's level (its (top - z_base)/tan nose term
+    goes negative by one run, butting the deck against the last mini tread).
+    """
+    top = tread_top_heights(riser, geometry.num_treads)
+    if geometry.landing_flush and geometry.landing_every > 0:
+        land = torch.tensor(
+            [geometry.is_landing(i) for i in range(geometry.num_treads)],
+            device=riser.device,
+        )
+        top = torch.where(land[None, :], top - riser[:, None], top)
+    return top
+
+
 def nose_x(x0: torch.Tensor, z: torch.Tensor, angle_rad: torch.Tensor) -> torch.Tensor:
     """x of the ladder nose line at height ``z`` (broadcasts over trailing dims)."""
     while angle_rad.dim() < z.dim():
@@ -593,7 +615,7 @@ def tread_layout(
     ``nose_jitter`` (N,T) shifts each tread's nose along the axis (irregular
     spacing, so the policy learns to read the per-foot target distance)."""
     T = geometry.num_treads
-    top = tread_top_heights(riser, T)
+    top = tread_top_heights_geom(geometry, riser)
     base, yaw, base_z = flight_frames(geometry, riser, angle_rad, x0, y0, flat, lateral, dyaw)
     flight = torch.tensor([geometry.flight_of(i) for i in range(T)], device=riser.device)
     z_base = base_z[:, flight]
