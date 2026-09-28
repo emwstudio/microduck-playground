@@ -54,8 +54,11 @@ everything else kept from v14/v15: (1) ``tumble_deficit`` — a tread-
 quantized high-water deficit (self-negating, weight 2.0) so every step
 spent below the episode's best tread bleeds, while crouches/bobbing stay
 free (foot_last_tread only moves on contact); (2) the v14 tread_stall dose
-is LIFTED while both feet are within 3 treads of the top platform
-(``_tread_stall_top_exempt``), so the TOP gate's required slow-down
+is LIFTED only while both feet are ON the top platform itself
+(``_tread_stall_top_exempt``, v20 — the v16 zone "within 3 treads of the
+top" gave the duck a legal dawdling strip on the last mini treads; the
+user is explicit that the last step needs no caution, so tread 10 pays
+the stall tax again and only the deck stays free), so the TOP gate's required slow-down
 (|v| < 0.35, 0.5 s hold) is no longer taxed as a stall.
 
 v17 (single variable: the deficit's schedule).  v16 applied the w=2.0 tax
@@ -241,20 +244,24 @@ def simple_stairs_tumble_deficit_penalty(env: ManagerBasedRlEnv) -> torch.Tensor
 def _tread_stall_top_exempt(
     env: ManagerBasedRlEnv,
     stall_s: float = 4.0,
-    exempt_below_top: int = 3,
+    exempt_below_top: int = 1,
 ) -> torch.Tensor:
-    """ladder_tread_stall_penalty with a top-approach exemption (v16).
+    """ladder_tread_stall_penalty with a top-approach exemption (v16, v20).
 
-    The TOP success gate requires slowing to |v| < 0.35 m/s and holding 0.5 s
-    at the platform edge — the 4 s stall window punishes exactly that
-    deceleration (probe: falls start at the 10 -> top transition carrying
-    speed).  While BOTH feet's last tread is within ``exempt_below_top`` of
-    the top platform (treads >= num_treads - 3 = 9 on simple_stairs), the
-    stall price is lifted so the finish may be taken carefully; everywhere
-    else the v14 dose applies unchanged.  Residual risk to watch: a free
-    park on treads 9-10 (if it emerges, tighten the zone to >= 10 rather
-    than raising the dose).
-    """
+    The TOP success gate requires slowing to |v| < 0.35 m/s and holding
+    0.5 s on the deck — the 4 s stall window must not price THAT.  While
+    BOTH feet's last tread is within ``exempt_below_top`` of the top
+    platform the stall price is lifted; everywhere else the v14 dose
+    applies unchanged.  v20 (user): the exemption is now ONLY the deck
+    itself (``exempt_below_top = 1`` — treads >= num_treads - 1 = 11).  The
+    v16 zone (treads >= 9) gave the duck a legal dawdling strip: v14c
+    tip-toed on the last mini treads for seconds before going up.  The user
+    is explicit — "the last step needs no caution, just go, falling is
+    fine" — so tread 10 pays the stall tax again (take a NEW tread within
+    4 s, i.e. step onto the deck), while the deck itself stays free
+    (stand or fall there as you like; TOP and the getup relay semantics
+    are untouched).  Only simple_stairs uses this wrapper; the ladder
+    family's own stall term is untouched."""
     base = microduck_mdp.ladder_tread_stall_penalty(env, stall_s=stall_s)
     state = microduck_mdp._stair_state(env)
     if state is None or not hasattr(state, "foot_last_tread"):

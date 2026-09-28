@@ -322,12 +322,16 @@ def test_v16_tread_stall_top_exemption(monkeypatch):
     )
     monkeypatch.setattr(ss, "microduck_mdp", fake_mdp)
     wrapper = ss._tread_stall_top_exempt
-    # treads (7, 8): below the zone -> the v14 dose fires.
+    # v20 zone: only the deck itself (num_treads - 1 = 11) is exempt.
+    # treads (7, 8) and (9, 10): below the deck -> the v14 dose fires.
     assert wrapper(_StubStairEnv([[7, 8]], [100])).tolist() == [-1.0]
-    # treads (9, 10): both within 3 of the top (num_treads - 3 = 9) -> exempt.
-    assert wrapper(_StubStairEnv([[9, 10]], [100])).tolist() == [0.0]
-    # one foot back on the floor: not exempt.
-    assert wrapper(_StubStairEnv([[9, -1]], [100])).tolist() == [-1.0]
+    assert wrapper(_StubStairEnv([[9, 10]], [100])).tolist() == [-1.0]
+    assert wrapper(_StubStairEnv([[10, 10]], [100])).tolist() == [-1.0]
+    # both feet on the deck (11): exempt.
+    assert wrapper(_StubStairEnv([[11, 11]], [100])).tolist() == [0.0]
+    # one foot back on a tread or the floor: not exempt.
+    assert wrapper(_StubStairEnv([[11, 10]], [100])).tolist() == [-1.0]
+    assert wrapper(_StubStairEnv([[11, -1]], [100])).tolist() == [-1.0]
 
 
 def test_v16_cfg_terms_and_ladder_unchanged():
