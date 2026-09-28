@@ -553,6 +553,7 @@ def reset_stair_ladder(
     min_start_tread: int = 0,
     open_riser: bool = False,
     top_approach_prob: float = 0.0,
+    deck_spawn_prob: float = 0.0,
 ) -> None:
     """Place the ladder for each environment and spawn the robot on it.
 
@@ -718,6 +719,14 @@ def reset_stair_ladder(
         )
         start = torch.where(force_topapp, top_start, start)
     run = riser / torch.tan(angle)
+    # v21 deck spawn (flush only): a small share of episodes starts with BOTH
+    # feet already on the deck (flat HOME stance, 6 cm past the nose) so the
+    # table walk gets on-policy data from iteration 0.  These episodes cannot
+    # rise promote_rise_m, so they are also marked spawn_on_top (s34 skip).
+    force_deck = torch.zeros(n, dtype=torch.bool, device=dev)
+    if deck_spawn_prob > 0.0 and getattr(geometry, "landing_flush", False) and geometry.landing_every > 0:
+        force_deck = (~on_floor) & (~force_topapp) & (torch.rand(n, device=dev) < deck_spawn_prob)
+        start = torch.where(force_deck, torch.full_like(start, top_idx - 1), start)
     start_is_landing = staircase & (start == land_idx) if staircase else torch.zeros(n, dtype=torch.bool, device=dev)
     start_is_top = (start == top_idx) if has_top else torch.zeros(n, dtype=torch.bool, device=dev)
     # Both feet on the landing (HOME) needs the next flight's first tread to
@@ -912,6 +921,21 @@ def reset_stair_ladder(
     root_x = root_x + sw_u * c_f - sw_v * s_f
     root_y = root_y + sw_u * s_f + sw_v * c_f
     root_z = root_z + swing.float() * u_pre * 0.5 * riser
+    if bool(force_deck.any()):
+        # v21 deck spawn override: flat HOME stance on the deck itself,
+        # 6 cm past the nose, instead of the generic on-ladder stance.
+        deck_noise = (torch.rand(n, 2, device=dev) * 2.0 - 1.0) * 0.01
+        deck_nose_x = state.tread_centre[env_ids, -1, 0] - 0.5 * geometry.landing_depth_m
+        root_x = torch.where(force_deck, deck_nose_x + 0.06 + deck_noise[:, 0], root_x)
+        root_y = torch.where(force_deck, origins[:, 1] + deck_noise[:, 1], root_y)
+        root_z = torch.where(
+            force_deck,
+            state.tread_top[env_ids, -1]
+            + _ladder.SOLE_BOTTOM_ABOVE_SITE_M
+            + site_clearance
+            + _ladder.HOME_TRUNK_ABOVE_SITE_M,
+            root_z,
+        )
     root_pos = torch.stack((root_x, root_y, root_z), dim=-1)
     asset.write_root_link_pose_to_sim(torch.cat((root_pos, quat), dim=-1), env_ids=env_ids)
     asset.write_root_link_velocity_to_sim(torch.zeros(n, 6, device=dev), env_ids=env_ids)
@@ -959,6 +983,12 @@ def reset_stair_ladder(
     joint_pos[:, servo_ids] += (
         torch.rand(n, len(servo_ids), device=dev) * 2.0 - 1.0
     ) * joint_noise
+    if bool(force_deck.any()):
+        # v21 deck spawn: flat HOME joints (no staggered-stance leg offsets).
+        nd = int(force_deck.sum())
+        joint_pos[force_deck] = asset.data.default_joint_pos[env_ids][force_deck] + (
+            torch.rand(nd, joint_pos.shape[1], device=dev) * 2.0 - 1.0
+        ) * joint_noise
     limits = asset.data.joint_pos_limits[env_ids][:, servo_ids]
     joint_pos[:, servo_ids] = torch.maximum(
         torch.minimum(joint_pos[:, servo_ids], limits[..., 1] - 0.02),
@@ -996,6 +1026,13 @@ def reset_stair_ladder(
     state.foot_last_tread[env_ids, 0] = torch.where(left_is_higher, higher_idx, lower_idx)
     state.foot_last_tread[env_ids, 1] = torch.where(left_is_higher, lower_idx, higher_idx)
     state.overstep[env_ids] = False
+    if bool(force_deck.any()):
+        # v21 deck spawn bookkeeping: both feet on the top landing.
+        state.foot_last_tread[env_ids[force_deck]] = top_idx
+        state.foot_support_z[env_ids[force_deck]] = (
+            state.tread_top[env_ids[force_deck], -1] - origins[force_deck, 2:3]
+        ).expand(-1, 2)
+        state.start_tread[env_ids[force_deck]] = top_idx
     if hasattr(state, "prev_potential"):
         state.prev_potential[env_ids] = torch.minimum(
             root_z, state.foot_support_z[env_ids].mean(dim=1) + origins[:, 2] + 0.125
@@ -1019,7 +1056,7 @@ def reset_stair_ladder(
     state.spawn_on_landing[env_ids] = on_landing
     if not hasattr(state, "spawn_on_top"):
         state.spawn_on_top = torch.zeros(env.num_envs, dtype=torch.bool, device=dev)
-    state.spawn_on_top[env_ids] = start_is_top | force_topapp
+    state.spawn_on_top[env_ids] = start_is_top | force_topapp | force_deck
 
 
 def _stair_leg_joint_ids(env: ManagerBasedRlEnv, asset: Entity, side: str) -> list[int]:
@@ -1230,27 +1267,11 @@ def _stair_foot_target_info(
     arange = torch.arange(num, device=env.device)
     index = torch.full((env.num_envs, 2), num, device=env.device, dtype=torch.long)
     vec = torch.zeros(env.num_envs, 2, 3, device=env.device)
+    deck = torch.zeros(env.num_envs, 2, dtype=torch.bool, device=env.device)
     for slot, side in enumerate((1.0, -1.0)):
         foot = asset.data.site_pos_w[:, sites[slot], :]
         side_ok = (state.tread_side == side) | (state.tread_side == 0.0)
         above = state.tread_top > (foot[:, 2:3] + min_rise)
-        if getattr(g, "landing_flush", False) and g.landing_every > 0:
-            # Flush landing: its top equals the previous tread's level, so the
-            # z-test never offers it as the next target and the duck stalls on
-            # the last mini tread.  Offer the landing to a foot in the
-            # APPROACH strip — standing on the last mini tread, before the
-            # deck nose (works for any landing setback), inside the landing
-            # width — while a foot already on the deck still gets no target
-            # (end of stairs).
-            nose = (state.tread_centre[:, -1, 0] - 0.5 * g.landing_depth_m)[:, None]
-            last_mini = state.tread_centre[:, -2, 0][:, None] if num >= 2 else nose
-            approach = (
-                (foot[:, 0:1] > last_mini - 0.01)
-                & (foot[:, 0:1] < nose + 0.005)
-                & ((foot[:, 1:2] - state.tread_centre[:, -1, 1:2]).abs() < 0.5 * g.landing_width_m)
-            )
-            land = torch.tensor([g.is_landing(i) for i in range(num)], device=env.device)
-            above = above | (land[None, :] & approach)
         candidate = torch.where(above & side_ok[None, :], arange[None, :], num)
         idx = candidate.min(dim=1).values
         clamped = idx.clamp_max(num - 1)
@@ -1281,7 +1302,33 @@ def _stair_foot_target_info(
         target = torch.stack((txy[:, 0], txy[:, 1], tz), dim=-1)
         index[:, slot] = idx
         vec[:, slot] = torch.nan_to_num(target - foot, nan=0.0)
-    valid = index < num
+        if getattr(g, "landing_flush", False) and g.landing_every > 0:
+            # v21 deck targets ("road-sign continuity"): past the last mini
+            # tread there is no next physical tread (the flush deck is level
+            # with it), so the stair targets run out and the duck stops at
+            # the stairs' end.  Every foot on or past the last mini tread
+            # gets a VIRTUAL next tread one run ahead of itself — the same
+            # forward profile as a stair step — clamped 4 cm short of the
+            # deck's far edge, per-side at the landing's lateral offset.
+            # Stateless (computed from the live foot position each step, so
+            # it cannot be rocked or latched); the virtual index ``num`` is
+            # what ``valid`` below counts as a real target.
+            run_slot = float(g.same_side_spacing()) * (state.riser / torch.tan(state.angle))
+            c11 = state.tread_centre[:, -1]
+            nose = c11[:, 0] - 0.5 * g.landing_depth_m
+            far = c11[:, 0] + 0.5 * g.landing_depth_m - 0.04
+            last_mini = state.tread_centre[:, -2, 0] if num >= 2 else nose
+            deck_mask = foot[:, 0] > last_mini - 0.5 * g.tread_depth_m + 0.002
+            tx = torch.clamp(foot[:, 0] + run_slot, min=nose, max=far)
+            lat = side * (0.5 * g.center_gap_m + 0.5 * g.side_width_m)
+            deck_target = torch.stack(
+                (tx, torch.full_like(tx, float(lat)), state.tread_top[:, -1] + g.landing_target_up_m),
+                dim=-1,
+            )
+            deck[:, slot] = deck_mask
+            index[:, slot] = torch.where(deck_mask, torch.full_like(idx, num), idx)
+            vec[:, slot] = torch.where(deck_mask[:, None], deck_target - foot, vec[:, slot])
+    valid = (index < num) | deck
     if g.landing_every > 0 and getattr(g, "landing_step_gate", False):
         # s18 lesson: from the (4, 5) stance the policy lifted the higher foot
         # (on 5) straight for the landing while standing on 4 - a 7 cm rise
@@ -1816,6 +1863,49 @@ def ladder_vertical_impact_penalty(
     return -jump
 
 
+def stair_deck_progress(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+    max_delta: float = 0.005,
+    edge_margin: float = 0.04,
+) -> torch.Tensor:
+    """Potential-based forward progress ACROSS the top deck (v21, flush only).
+
+    Pays the per-step-capped delta of the mean foot x, clamped to the deck's
+    [nose, far - ``edge_margin``] span, gated on at least one foot inside the
+    landing footprint — the climb already pays for getting here (upward and
+    foot-target progress); this pays for crossing the table.  Symmetric:
+    forward pays, backward costs, rocking nets zero, standing pays nothing,
+    so it cannot be farmed.  At the 0.04 m/s climb command the realized
+    forward speed is ~0.8 mm/step, so the cap only binds on jerks/falls
+    (anti-jackpot).  A full ~0.35 m crossing at weight 100 is worth ~35 —
+    about two risers, well below the climb stack (AGENTS.md reward mass).
+    """
+    n, dev = env.num_envs, env.device
+    state = _stair_state(env)
+    if state is None or not getattr(state.geometry, "landing_flush", False):
+        return torch.zeros(n, device=dev)
+    g = state.geometry
+    if g.landing_every <= 0:
+        return torch.zeros(n, device=dev)
+    asset: Entity = env.scene[asset_cfg.name]
+    sites = _stair_foot_sites(env, asset)
+    feet_xyz = asset.data.site_pos_w[:, sites, :]
+    c = state.tread_centre[:, -1]
+    nose = c[:, 0] - 0.5 * g.landing_depth_m
+    far = c[:, 0] + 0.5 * g.landing_depth_m - edge_margin
+    mean_x = feet_xyz[..., 0].mean(dim=1)
+    potential = torch.minimum(torch.maximum(mean_x, nose), far)
+    if not hasattr(state, "deck_prev"):
+        state.deck_prev = potential.clone()
+    fresh = env.episode_length_buf <= 1
+    state.deck_prev = torch.where(fresh, potential, state.deck_prev)
+    delta = (potential - state.deck_prev).clamp(-max_delta, max_delta)
+    state.deck_prev = potential
+    on_deck = feet_on_landing_xy(state, feet_xyz).any(dim=1)
+    return torch.nan_to_num(delta * on_deck.float(), nan=0.0)
+
+
 # --- terminations ----------------------------------------------------------------
 
 
@@ -1946,8 +2036,14 @@ def ladder_reached_top(
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
     margin: float = 0.05,
     hold_s: float = 0.5,
+    finish_ahead_m: float = 0.30,
 ) -> torch.Tensor:
-    """Success end of episode (registered with time_out=True)."""
+    """Success end of episode (registered with time_out=True).
+
+    ``finish_ahead_m`` (flush decks only, v21): the trunk must be this far
+    past the deck's nose — success is CROSSING the table, not arriving at
+    its edge.  0.30 of the 0.40 m deck (far edge − 0.06).  Non-flush
+    geometries ignore it (old arrive-and-stand semantics)."""
     state = _stair_state(env)
     asset: Entity = env.scene[asset_cfg.name]
     z = asset.data.root_link_pos_w[:, 2]
@@ -1982,6 +2078,13 @@ def ladder_reached_top(
         # standing duck with noise: ~0.2 m/s, ~3 rad/s; a hop-and-drop
         # touchdown: ~0.9 m/s, ~9 rad/s (s32 probe).
         ok = on_top & (tilt < math.radians(45.0)) & (z > top + margin) & (v < 0.35) & (w < 4.5)
+        if getattr(state.geometry, "landing_flush", False):
+            # v21: success is CROSSING the table.  Arriving at the deck edge
+            # is not enough — the trunk must be ``finish_ahead_m`` past the
+            # nose (far edge − 0.06 of the 0.40 m deck).  Non-flush keeps the
+            # arrive-and-stand semantics.
+            nose = state.tread_centre[:, -1, 0] - 0.5 * state.geometry.landing_depth_m
+            ok = ok & (asset.data.root_link_pos_w[:, 0] >= nose + finish_ahead_m)
         # s30 lesson: an instant +100 on arrival was a jackpot (episodes 13
         # steps, 165 head touches / 79 falls per window: hop up and drop).
         # Success needs ``hold_s`` of standing there (counter advanced once
@@ -9313,6 +9416,7 @@ def reset_floor_desk(
     min_start_tread: int = 0,
     open_riser: bool = False,
     top_approach_prob: float = 0.0,
+    deck_spawn_prob: float = 0.0,
 ) -> None:
     """Retain standard randomized proprioceptive spawn; place the entire rigid design."""
     params=locals().copy();params.pop("env");params.pop("env_ids")

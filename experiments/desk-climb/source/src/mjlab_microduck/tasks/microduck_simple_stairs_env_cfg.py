@@ -97,6 +97,24 @@ slab's 20 mm side wall above the 25 mm riser.  ``landing_nose_bevel_m``
 play/eval share it) replaces that wall with a triangular ramp at the top
 platform's nose; the mini-tread open-riser gaps are untouched.  Set the
 env var to 0 to restore the wall for A/B.
+
+v21 (the thorough route — "why does the duck STOP at the stairs' end
+instead of walking onto the table?"): the stair foot targets simply ran
+out at the top, so there was no road-sign on the deck.  Four pieces:
+(1) ROAD-SIGN CONTINUITY — every foot on or past the last mini tread gets
+a virtual next tread one run ahead of itself in the foot-target obs slot
+(same profile as a stair step, clamped 4 cm short of the deck's far edge);
+stateless, so it cannot be rocked or latched.  (2) ``deck_progress`` —
+potential-based pay for crossing the deck (forward pays, backward costs,
+rocking nets zero; weight 100 ≈ two risers per crossing, below the climb
+stack).  (3) The stall-tax exemption is REMOVED entirely
+(``exempt_below_top = 0``): reached_top ends successful crossings in 0.5 s,
+long before the 4 s stall window binds, so the deck exemption only ever
+licensed deck parks.  (4) ``deck_spawn_prob`` (0.10 train / 0 eval,
+SIMPLE_STAIRS_DECK_SPAWN) spawns directly on the deck (spawn_on_top skip
+intact) so the table walk is on-policy from iteration 0.  The success
+gate also changes meaning: reached_top now requires the trunk 0.30 m past
+the deck nose (crossing, not arriving) on flush decks.
 """
 
 import os
@@ -244,23 +262,20 @@ def simple_stairs_tumble_deficit_penalty(env: ManagerBasedRlEnv) -> torch.Tensor
 def _tread_stall_top_exempt(
     env: ManagerBasedRlEnv,
     stall_s: float = 4.0,
-    exempt_below_top: int = 1,
+    exempt_below_top: int = 0,
 ) -> torch.Tensor:
-    """ladder_tread_stall_penalty with a top-approach exemption (v16, v20).
+    """ladder_tread_stall_penalty with a top-approach exemption (v16, v20, v21).
 
     The TOP success gate requires slowing to |v| < 0.35 m/s and holding
-    0.5 s on the deck — the 4 s stall window must not price THAT.  While
-    BOTH feet's last tread is within ``exempt_below_top`` of the top
-    platform the stall price is lifted; everywhere else the v14 dose
-    applies unchanged.  v20 (user): the exemption is now ONLY the deck
-    itself (``exempt_below_top = 1`` — treads >= num_treads - 1 = 11).  The
-    v16 zone (treads >= 9) gave the duck a legal dawdling strip: v14c
-    tip-toed on the last mini treads for seconds before going up.  The user
-    is explicit — "the last step needs no caution, just go, falling is
-    fine" — so tread 10 pays the stall tax again (take a NEW tread within
-    4 s, i.e. step onto the deck), while the deck itself stays free
-    (stand or fall there as you like; TOP and the getup relay semantics
-    are untouched).  Only simple_stairs uses this wrapper; the ladder
+    0.5 s — far inside the 4 s stall window, so the v16/v20 deck exemption
+    was solving a non-problem while licensing deck parks.  v21 removes the
+    exemption entirely (``exempt_below_top = 0``: the tax fires everywhere,
+    deck included) because "keep walking on the table" is now the goal:
+    reached_top ends successful crossings long before the window binds, and
+    any stand that outlasts it (without succeeding) is exactly the stall the
+    tax exists to price.  v20 (user) had already narrowed the v16 zone
+    (treads >= 9) to the deck only: "the last step needs no caution, just
+    go — falling is fine."  Only simple_stairs uses this wrapper; the ladder
     family's own stall term is untouched."""
     base = microduck_mdp.ladder_tread_stall_penalty(env, stall_s=stall_s)
     state = microduck_mdp._stair_state(env)
@@ -359,6 +374,7 @@ def make_microduck_simple_stairs_env_cfg(
         top_spawn_prob=top_spawn_prob,
         open_riser=True,  # v12: 25 mm risers through the open gap, not under the tread
         top_approach_prob=top_approach_prob,
+        deck_spawn_prob=0.0 if play else float(os.getenv("SIMPLE_STAIRS_DECK_SPAWN", "0.10")),
     )
     # v13 F1: anti-park.  The stance composite pays ~0.54/step for standing on
     # treads under a climb command (track factor 0.27 x weight 2.0), and the
@@ -395,6 +411,14 @@ def make_microduck_simple_stairs_env_cfg(
     # ceiling to 69 mm (covers the 66.6 median; p90 72.4 keeps a small tax as
     # anti-fling pressure) and the L4 ceiling to 78 mm.
     cfg.rewards["swing_overshoot"].params["clearance"] = 0.05
+    # v21 deck progress: potential-based pay for walking ACROSS the table
+    # (forward pays, backward costs, rocking nets zero, standing pays
+    # nothing).  A full ~0.35 m crossing is worth ~35 at this weight — about
+    # two risers, well below the climb stack, so it can't dominate.
+    cfg.rewards["deck_progress"] = RewardTermCfg(
+        func=microduck_mdp.stair_deck_progress,
+        weight=float(os.getenv("SIMPLE_STAIRS_DECK_PROGRESS_W", "100.0")),
+    )
     # v15: decay the near-top spawn share.  The top transition is a bolt-on,
     # not the main course: dense last-mile practice in the first half, then a
     # retention share so ordinary climbs re-dominate (the v10 lesson — a

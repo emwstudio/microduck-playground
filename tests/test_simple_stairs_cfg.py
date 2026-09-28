@@ -327,8 +327,8 @@ def test_v16_tread_stall_top_exemption(monkeypatch):
     assert wrapper(_StubStairEnv([[7, 8]], [100])).tolist() == [-1.0]
     assert wrapper(_StubStairEnv([[9, 10]], [100])).tolist() == [-1.0]
     assert wrapper(_StubStairEnv([[10, 10]], [100])).tolist() == [-1.0]
-    # both feet on the deck (11): exempt.
-    assert wrapper(_StubStairEnv([[11, 11]], [100])).tolist() == [0.0]
+    # both feet on the deck (11): v20 exempted it, v21 fires the tax everywhere.
+    assert wrapper(_StubStairEnv([[11, 11]], [100])).tolist() == [-1.0]
     # one foot back on a tread or the floor: not exempt.
     assert wrapper(_StubStairEnv([[11, 10]], [100])).tolist() == [-1.0]
     assert wrapper(_StubStairEnv([[11, -1]], [100])).tolist() == [-1.0]
@@ -527,6 +527,8 @@ def _flush_state(flush: bool):
     centres, tops, nose_u, target_xy, tread_yaw = lad.tread_layout(g, riser, angle, x0, y0)
     return SimpleNamespace(
         geometry=g,
+        riser=riser,
+        angle=angle,
         tread_side=torch.tensor([float(g.tread_side(i)) for i in range(g.num_treads)]),
         tread_top=tops,
         tread_centre=centres,
@@ -561,33 +563,30 @@ def _target_index(state, feet_xyz):
     return int(info["index"][0, 0]), int(info["index"][0, 1])
 
 
+def _target_index(state, feet_xyz):
+    env = type("E", (), {"num_envs": 1, "device": "cpu", "common_step_counter": 0, "_stair": state})()
+    snap_mdp = _load_snapshot_mdp()
+    info = snap_mdp._stair_foot_target_info(env, _StubAsset(feet_xyz))
+    return int(info["index"][0, 0]), int(info["index"][0, 1])
+
+
 def test_flush_landing_target_candidates():
-    state = _flush_state(flush=True)
-    g = state.geometry
-    top_idx = g.num_treads - 1
-    c10 = state.tread_centre[0, top_idx - 1]
-    nose = float(state.tread_centre[0, top_idx, 0]) - 0.5 * g.landing_depth_m
-    z = float(state.tread_top[0, top_idx]) + 0.003
-    # Foot standing on the last mini tread (approach): the flush deck must be
-    # offered as the next target (the z-test alone would offer nothing).
-    feet = [[[float(c10[0]), 0.042, float(state.tread_top[0, top_idx - 1]) + 0.003],
-             [float(c10[0]), -0.042, float(state.tread_top[0, top_idx - 1]) + 0.003]]]
-    assert _target_index(state, feet) == (top_idx, top_idx)
-    # Foot already ON the deck (past the nose): still no target (end of stairs).
-    feet = [[[nose + 0.05, 0.0, z], [nose + 0.05, 0.0, z]]]
-    idx = _target_index(state, feet)
-    assert idx == (g.num_treads, g.num_treads)
-    # Foot on the second-to-last mini tread: target is the last mini tread.
-    c9 = state.tread_centre[0, top_idx - 2]
-    feet = [[[float(c9[0]), 0.042, float(state.tread_top[0, top_idx - 2]) + 0.003],
-             [float(c9[0]), -0.042, float(state.tread_top[0, top_idx - 2]) + 0.003]]]
-    assert _target_index(state, feet) == (top_idx - 1, top_idx - 1)
-    # Non-flush: byte-identical behaviour (the xy branch never runs).
+    """Non-flush behaviour is byte-identical after the v21 deck-target rework
+    (the v21 branch is flush-gated; flush behaviour is covered by
+    test_v21_deck_targets)."""
     state_nf = _flush_state(flush=False)
+    g = state_nf.geometry
+    top_idx = g.num_treads - 1
+    c9 = state_nf.tread_centre[0, top_idx - 2]
+    c10 = state_nf.tread_centre[0, top_idx - 1]
+    # Foot on the second-to-last mini tread: target is the last mini tread.
+    feet = [[[float(c9[0]), 0.042, float(state_nf.tread_top[0, top_idx - 2]) + 0.003],
+             [float(c9[0]), -0.042, float(state_nf.tread_top[0, top_idx - 2]) + 0.003]]]
     assert _target_index(state_nf, feet) == (top_idx - 1, top_idx - 1)
-    feet10 = [[[float(c10[0]), 0.042, float(state.tread_top[0, top_idx - 1]) + 0.003],
-               [float(c10[0]), -0.042, float(state.tread_top[0, top_idx - 1]) + 0.003]]]
-    assert _target_index(state_nf, feet10) == (top_idx, top_idx)  # z covers it as before
+    # Foot on the last mini tread: the z test covers the landing (as before).
+    feet10 = [[[float(c10[0]), 0.042, float(state_nf.tread_top[0, top_idx - 1]) + 0.003],
+               [float(c10[0]), -0.042, float(state_nf.tread_top[0, top_idx - 1]) + 0.003]]]
+    assert _target_index(state_nf, feet10) == (top_idx, top_idx)
 
 
 def test_feet_on_landing_xy_classification():
@@ -613,18 +612,21 @@ def test_flush_reached_top_xy_gate(monkeypatch):
     nose = float(state.tread_centre[0, top_idx, 0]) - 0.5 * g.landing_depth_m
     snap_mdp = _load_snapshot_mdp()
 
-    def _run(flush_state):
-        # Both feet INSIDE the deck footprint but the contact geom still reads
-        # the mini tread (the flush seam): success must latch via the xy gate
-        # when flush, and must NOT when non-flush (behaviour unchanged).
+    def _run(flush_state, trunk_x=None, geom_tread=None):
+        # Both feet INSIDE the deck footprint; ``geom_tread`` is what the
+        # contact classification reports (the flush seam can misread the
+        # mini tread).
         asset = _StubAsset(
             [[[nose + 0.06, 0.042, top + 0.003], [nose + 0.06, -0.042, top + 0.003]]]
         )
-        asset.data.root_link_pos_w = torch.tensor([[nose + 0.06, 0.0, top + 0.115]])
+        asset.data.root_link_pos_w = torch.tensor(
+            [[trunk_x if trunk_x is not None else nose + 0.06, 0.0, top + 0.115]]
+        )
+        gt = top_idx - 1 if geom_tread is None else geom_tread
         monkeypatch.setattr(
             snap_mdp, "_stair_contacts",
-            lambda env: {
-                "foot_tread": torch.tensor([[top_idx - 1, top_idx - 1]]),
+            lambda env, gt=gt: {
+                "foot_tread": torch.tensor([[gt, gt]]),
                 "foot_support": torch.tensor([[True, True]]),
             },
         )
@@ -646,8 +648,13 @@ def test_flush_reached_top_xy_gate(monkeypatch):
             fired |= bool(snap_mdp.ladder_reached_top(env)[0])
         return fired
 
-    assert _run(state) is True
-    assert _run(_flush_state(flush=False)) is False
+    # v21: success = CROSSING the deck (trunk >= nose + 0.30), not arriving.
+    assert _run(state, trunk_x=nose + 0.06) is False  # on the deck but at the nose
+    assert _run(state, trunk_x=nose + 0.29) is False  # just short of the finish
+    assert _run(state, trunk_x=nose + 0.31) is True  # crossed
+    # non-flush: arrive-and-stand semantics unchanged (fires at the nose when
+    # the contact geom correctly reports the top landing).
+    assert _run(_flush_state(flush=False), trunk_x=nose + 0.06, geom_tread=top_idx) is True
 
 
 def test_rails_rest_on_deck_not_embedded():
@@ -772,7 +779,9 @@ def test_num_treads_env_var(monkeypatch):
     wrapper = ss._tread_stall_top_exempt
     env24 = _StubStairEnv([[24, 24]], [100])
     env24._stair.geometry = geo
-    assert wrapper(env24).tolist() == [0.0]
+    # v21: the stall exemption is gone entirely — the tax fires everywhere,
+    # deck included (env24 is both feet ON the deck at N=25).
+    assert wrapper(env24).tolist() == [-1.0]
     env23 = _StubStairEnv([[23, 24]], [100])
     env23._stair.geometry = geo
     assert wrapper(env23).tolist() == [-1.0]
@@ -794,3 +803,142 @@ def test_warn_load_without_resume(capsys):
     assert capsys.readouterr().out == ""
     snap_mdp.warn_load_without_resume({"resume": False})
     assert capsys.readouterr().out == ""
+
+
+# --- v21: road-sign continuity + deck progress + stall-exemption removal --------
+
+
+def _target_info(state, feet_xyz):
+    env = type("E", (), {"num_envs": 1, "device": "cpu", "common_step_counter": 0, "_stair": state})()
+    snap_mdp = _load_snapshot_mdp()
+    return snap_mdp._stair_foot_target_info(env, _StubAsset(feet_xyz))
+
+
+def test_v21_deck_targets():
+    state = _flush_state(flush=True)
+    g = state.geometry
+    num = g.num_treads
+    top_idx = num - 1
+    c10 = state.tread_centre[0, top_idx - 1]
+    c11 = state.tread_centre[0, top_idx]
+    nose = float(c11[0]) - 0.5 * g.landing_depth_m
+    far = float(c11[0]) + 0.5 * g.landing_depth_m - 0.04
+    run = float(state.riser[0] / math.tan(state.angle[0])) * float(g.same_side_spacing())
+    top = float(state.tread_top[0, top_idx])
+    lat = 0.5 * g.center_gap_m + 0.5 * g.side_width_m
+    up_z = top + g.landing_target_up_m
+    # Foot on the last mini tread: a virtual next tread one run ahead, per-side.
+    feet = [[[float(c10[0]), 0.042, float(state.tread_top[0, top_idx - 1]) + 0.003],
+             [float(c10[0]) - 0.01, -0.042, float(state.tread_top[0, top_idx - 1]) + 0.003]]]
+    info = _target_info(state, feet)
+    assert info["valid"].tolist() == [[True, True]]
+    tx = min(float(c10[0]) + run, far)
+    assert info["vec"][0, 0, 0].item() == pytest.approx(tx - float(c10[0]), abs=1e-5)
+    assert info["vec"][0, 0, 1].item() == pytest.approx(lat - 0.042, abs=1e-5)
+    assert info["vec"][0, 0, 2].item() == pytest.approx(up_z - (float(state.tread_top[0, top_idx - 1]) + 0.003), abs=1e-5)
+    assert int(info["index"][0, 0]) == num  # virtual deck index
+    # Foot mid-deck: the target advances with it (foot_x + run, never past far).
+    feet = [[[nose + 0.10, 0.0, top + 0.003], [far + 0.02, 0.0, top + 0.003]]]
+    info = _target_info(state, feet)
+    assert info["valid"].tolist() == [[True, True]]
+    assert info["vec"][0, 0, 0].item() == pytest.approx(run, abs=1e-5)
+    assert info["vec"][0, 1, 0].item() == pytest.approx(far - (far + 0.02), abs=1e-5)  # clamped at far
+    # Foot one tread below: normal stair target, no deck branch.
+    c9 = state.tread_centre[0, top_idx - 2]
+    feet = [[[float(c9[0]), 0.042, float(state.tread_top[0, top_idx - 2]) + 0.003],
+             [float(c9[0]), -0.042, float(state.tread_top[0, top_idx - 2]) + 0.003]]]
+    info = _target_info(state, feet)
+    assert int(info["index"][0, 0]) == top_idx - 1
+    # Non-flush: byte-identical (approach -> landing target, deck -> no target).
+    state_nf = _flush_state(flush=False)
+    info = _target_info(state_nf, [[[float(c10[0]), 0.042, float(state.tread_top[0, top_idx - 1]) + 0.003],
+                                    [float(c10[0]), -0.042, float(state.tread_top[0, top_idx - 1]) + 0.003]]])
+    assert int(info["index"][0, 0]) == top_idx and bool(info["valid"][0, 0])
+    # The non-flush landing sits one riser above the last mini tread (flush
+    # geometry differs), so derive nose/top from state_nf itself.
+    nose_nf = float(state_nf.tread_centre[0, top_idx, 0]) - 0.5 * g.landing_depth_m
+    top_nf = float(state_nf.tread_top[0, top_idx])
+    info = _target_info(state_nf, [[[nose_nf + 0.10, 0.0, top_nf + 0.003], [nose_nf + 0.10, 0.0, top_nf + 0.003]]])
+    assert int(info["index"][0, 0]) == num and not bool(info["valid"][0, 0])
+
+
+class _DeckRewardEnv:
+    def __init__(self, state, feet_xyz, buf):
+        self.num_envs = 1
+        self.device = "cpu"
+        self.episode_length_buf = torch.tensor(buf)
+        self._stair = state
+        asset = _StubAsset(feet_xyz)
+        self.scene = {"robot": asset}
+        self.robot = asset
+
+
+def _deck_state():
+    return _flush_state(flush=True)
+
+
+def test_v21_deck_progress_reward():
+    state = _deck_state()
+    g = state.geometry
+    top_idx = g.num_treads - 1
+    nose = float(state.tread_centre[0, top_idx, 0]) - 0.5 * g.landing_depth_m
+    top = float(state.tread_top[0, top_idx])
+    snap_mdp = _load_snapshot_mdp()
+    f = snap_mdp.stair_deck_progress
+
+    def step(env, x1, x2=None, z=None):
+        z = top + 0.003 if z is None else z
+        env.robot.data.site_pos_w = torch.tensor([[[x1, 0.0, z], [x1 if x2 is None else x2, 0.0, z]]])
+        return float(f(env)[0])
+
+    env = _DeckRewardEnv(state, [[[nose + 0.05, 0.0, top + 0.003], [nose + 0.05, 0.0, top + 0.003]]], [1])
+    assert step(env, nose + 0.05) == pytest.approx(0.0, abs=1e-6)  # fresh: latch, no pay
+    env.episode_length_buf = torch.tensor([50])  # mid-episode from here on
+    # (float32 potential arithmetic: millimetre deltas carry ~1e-5 rounding.)
+    assert step(env, nose + 0.052) == pytest.approx(0.002, abs=1e-5)  # +2 mm both feet
+    assert step(env, nose + 0.054) == pytest.approx(0.002, abs=1e-5)
+    assert step(env, nose + 0.050) == pytest.approx(-0.004, abs=1e-5)  # backward 4 mm
+    assert step(env, nose + 0.050) == pytest.approx(0.0, abs=1e-6)  # standing
+    # rocking: +2 then -2 nets zero
+    step(env, nose + 0.052)
+    assert step(env, nose + 0.050) == pytest.approx(-0.002, abs=1e-5)
+    # gate: no foot in the landing footprint -> zero even when moving
+    env.episode_length_buf = torch.tensor([50])
+    assert step(env, nose - 0.05, z=top - 0.02) == 0.0
+    # non-flush: the term is inert
+    state_nf = _flush_state(flush=False)
+    env2 = _DeckRewardEnv(state_nf, [[[nose + 0.05, 0.0, top + 0.003], [nose + 0.05, 0.0, top + 0.003]]], [1])
+    env2.robot.data.site_pos_w = torch.tensor([[[nose + 0.06, 0.0, top + 0.003], [nose + 0.06, 0.0, top + 0.003]]])
+    assert float(f(env2)[0]) == 0.0
+
+
+def test_v21_stall_exemption_removed(monkeypatch):
+    import torch as _t
+    from types import SimpleNamespace
+
+    fake_mdp = SimpleNamespace(
+        ladder_tread_stall_penalty=lambda env, stall_s=4.0: _t.full((env.num_envs,), -1.0),
+        _stair_state=lambda env: env._stair,
+    )
+    monkeypatch.setattr(ss, "microduck_mdp", fake_mdp)
+    wrapper = ss._tread_stall_top_exempt
+    # v21: the exemption is gone — the tax fires even with both feet on the deck.
+    assert wrapper(_StubStairEnv([[11, 11]], [100])).tolist() == [-1.0]
+    assert wrapper(_StubStairEnv([[10, 10]], [100])).tolist() == [-1.0]
+    assert wrapper(_StubStairEnv([[7, 8]], [100])).tolist() == [-1.0]
+
+
+def test_v21_deck_spawn_params():
+    _patch_snapshot_mdp()
+    train = ss.make_microduck_simple_stairs_env_cfg(play=False)
+    assert train.events["reset_stair_ladder"].params["deck_spawn_prob"] == 0.10
+    play = ss.make_microduck_simple_stairs_env_cfg(play=True)
+    assert play.events["reset_stair_ladder"].params["deck_spawn_prob"] == 0.0
+    from mjlab_microduck.tasks import microduck_ladder_env_cfg as ladder_mod
+
+    ladder_cfg = ladder_mod.make_microduck_ladder_env_cfg()
+    assert ladder_cfg.events["reset_stair_ladder"].params["deck_spawn_prob"] == 0.0
+    import inspect
+
+    snap_mdp = _load_snapshot_mdp()
+    assert "deck_spawn_prob" in inspect.signature(snap_mdp.reset_stair_ladder).parameters

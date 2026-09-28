@@ -145,6 +145,7 @@ def make_microduck_ladder_env_cfg(
     nose_jitter_m: float = float(os.getenv("MICRODUCK_LADDER_NOSE_JITTER_M", "0.0")),
     open_riser: bool = False,
     top_approach_prob: float = 0.0,
+    deck_spawn_prob: float = 0.0,
 ) -> ManagerBasedRlEnvCfg:
     cfg = make_microduck_velocity_env_cfg(play=play, rough=False)
 
@@ -327,6 +328,9 @@ def make_microduck_ladder_env_cfg(
         # simple_stairs v15: near-top "last mile" static spawns (start in
         # {num_treads-4 .. num_treads-2}); 0 everywhere else.
         "top_approach_prob": top_approach_prob,
+        # simple_stairs v21 (flush): spawn directly on the deck (both feet on
+        # the top platform) so the table walk gets on-policy data; 0 elsewhere.
+        "deck_spawn_prob": deck_spawn_prob,
     }
     if play:
         spawn_params.update(_play_overrides())
