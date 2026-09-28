@@ -412,3 +412,51 @@ def test_simple_stairs_bevel_switch(monkeypatch):
     cfg = ss.make_microduck_simple_stairs_env_cfg()
     assert cfg.events["reset_stair_ladder"].params["geometry"].landing_nose_bevel_m == pytest.approx(0.025)
     assert cfg.events["seed_start_level"].params["geometry"].landing_nose_bevel_m == pytest.approx(0.025)
+
+
+def test_table_legs_and_rail_overhang(monkeypatch):
+    import dataclasses
+
+    g = lad.StairLadderGeometry(num_treads=12, alternating=False, tread_depth_m=0.060, landing_every=12)
+    # Family defaults: everything off.
+    assert g.landing_table_leg_radius_m == 0.0
+    assert g.rail_overhang_m == 0.0
+    assert len(lad.make_tread_spec(g, 11).body("tread").geoms) == 1
+    # Legs on: box + 4 non-collidable corner cylinders; they coexist with the bevel.
+    g_legs = dataclasses.replace(g, landing_table_leg_radius_m=0.0075)
+    geoms = lad.make_tread_spec(g_legs, 11).body("tread").geoms
+    assert len(geoms) == 5
+    legs = [x for x in geoms if x.name and x.name.startswith("table_leg")]
+    assert len(legs) == 4
+    assert all(int(x.contype) == 0 and int(x.conaffinity) == 0 for x in legs)
+    g_both = dataclasses.replace(g_legs, landing_nose_bevel_m=0.025)
+    assert len(lad.make_tread_spec(g_both, 11).body("tread").geoms) == 6
+    # Rail overhang: stock poses identical at 0; at 0.12 the top end extends
+    # 0.12 m along the incline (centre shifts 0.06), the bottom end is fixed,
+    # and the spec half-length grows by 0.06.
+    angle = torch.tensor([math.radians(20.0)])
+    x0 = torch.zeros(1)
+    y0 = torch.zeros(1)
+    p0, q0 = lad.rail_poses(g, angle, x0, y0)
+    g_oh = dataclasses.replace(g, rail_overhang_m=0.12)
+    p1, q1 = lad.rail_poses(g_oh, angle, x0, y0)
+    assert torch.allclose(q0, q1)  # same incline
+    a20 = math.radians(20.0)
+    shift = p1 - p0
+    assert float(shift[0, 0, 0]) == pytest.approx(0.06 * math.cos(a20), abs=1e-6)
+    assert float(shift[0, 0, 1]) == pytest.approx(0.0, abs=1e-6)
+    assert float(shift[0, 0, 2]) == pytest.approx(0.06 * math.sin(a20), abs=1e-6)
+    s0 = float(lad.make_rail_spec(g).body("rail").geoms[0].size[2])
+    s1 = float(lad.make_rail_spec(g_oh).body("rail").geoms[0].size[2])
+    assert s1 - s0 == pytest.approx(0.06)
+    # simple_stairs switches: default ON, env-off restores stock.
+    _patch_snapshot_mdp()
+    cfg = ss.make_microduck_simple_stairs_env_cfg()
+    geo = cfg.events["reset_stair_ladder"].params["geometry"]
+    assert geo.landing_table_leg_radius_m == pytest.approx(0.0075)
+    assert geo.rail_overhang_m == pytest.approx(0.12)
+    monkeypatch.setenv("SIMPLE_STAIRS_TABLE_LEGS", "0")
+    monkeypatch.setenv("SIMPLE_STAIRS_RAIL_OVERHANG_M", "0.0")
+    geo = ss.make_microduck_simple_stairs_env_cfg().events["reset_stair_ladder"].params["geometry"]
+    assert geo.landing_table_leg_radius_m == 0.0
+    assert geo.rail_overhang_m == 0.0

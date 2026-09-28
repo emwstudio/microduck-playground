@@ -144,6 +144,16 @@ class StairLadderGeometry:
     # rides up onto the platform instead of bouncing back down.  0.0 keeps
     # the plain box everywhere (ladder family zero-change).
     landing_nose_bevel_m: float = 0.0
+    # Table legs under the landing (visual only, 2026-09-28): > 0 adds four
+    # non-collidable cylinders at the landing box's bottom corners, hanging
+    # long enough to always reach past the floor (the terrain hides the
+    # excess — the platform top height is per-env, the spec is compile-time).
+    # 0.0 keeps the floating box (ladder family zero-change).
+    landing_table_leg_radius_m: float = 0.0
+    # Rail overhang past the top tread (visual, 2026-09-28): total metres the
+    # side rails extend beyond their nominal top end, leaning the ladder onto
+    # the table edge.  0.0 keeps the stock rails (ladder family zero-change).
+    rail_overhang_m: float = 0.0
     # Flush landing ("ladder leaning on the desk", user 2026-09-28): the
     # landing's top CONTINUES the previous tread's level instead of sitting
     # one riser up.  The negative (top - z_base)/tan term pulls the box one
@@ -396,36 +406,56 @@ def _landing_spec(geometry: StairLadderGeometry) -> mujoco.MjSpec:
         "0.62 0.48 0.30 1",
         geometry.tread_friction,
     )
-    bevel = float(getattr(geometry, "landing_nose_bevel_m", 0.0))
-    if bevel <= 0.0:
-        return spec
     hd = 0.5 * geometry.landing_depth_m
     hw = 0.5 * geometry.landing_width_m
     ht = 0.5 * geometry.landing_thickness_m
-    # Triangular prism: bottom edge at the nose base (slab bottom), rising to
-    # the nose top; extruded across the full platform width.  Six vertices —
-    # the convex hull is the wedge (same uservert pattern as _prism_spec).
-    verts = []
-    for y in (-hw, hw):
-        verts += ((-hd - bevel, y, -ht), (-hd, y, -ht), (-hd, y, ht))
-    mesh = spec.add_mesh(name="nose_bevel_mesh")
-    mesh.uservert = [c for v in verts for c in v]
-    geom = spec.body("tread").add_geom(
-        name="nose_bevel", type=mujoco.mjtGeom.mjGEOM_MESH, meshname="nose_bevel_mesh"
-    )
-    geom.friction = [geometry.tread_friction, 0.005, 0.0001]
-    geom.condim = 3
-    geom.priority = 1
-    geom.solref = [TREAD_SOLREF_TIMECONST_S, 1.0]
-    geom.solimp = [0.95, 0.99, 0.001, 0.5, 2.0]
-    geom.rgba = [0.66, 0.52, 0.34, 1]
+    bevel = float(getattr(geometry, "landing_nose_bevel_m", 0.0))
+    if bevel > 0.0:
+        # Triangular prism: bottom edge at the nose base (slab bottom), rising to
+        # the nose top; extruded across the full platform width.  Six vertices —
+        # the convex hull is the wedge (same uservert pattern as _prism_spec).
+        verts = []
+        for y in (-hw, hw):
+            verts += ((-hd - bevel, y, -ht), (-hd, y, -ht), (-hd, y, ht))
+        mesh = spec.add_mesh(name="nose_bevel_mesh")
+        mesh.uservert = [c for v in verts for c in v]
+        geom = spec.body("tread").add_geom(
+            name="nose_bevel", type=mujoco.mjtGeom.mjGEOM_MESH, meshname="nose_bevel_mesh"
+        )
+        geom.friction = [geometry.tread_friction, 0.005, 0.0001]
+        geom.condim = 3
+        geom.priority = 1
+        geom.solref = [TREAD_SOLREF_TIMECONST_S, 1.0]
+        geom.solimp = [0.95, 0.99, 0.001, 0.5, 2.0]
+        geom.rgba = [0.66, 0.52, 0.34, 1]
+    # Table legs (visual): four thin cylinders at the box's bottom corners,
+    # in the SAME mocap body (they follow the platform at every reset).
+    # Non-collidable on purpose (contype/conaffinity 0): they hang 35 cm
+    # down so they always reach past the floor plane — the platform top
+    # height varies per env (per-env riser) but the spec is compile-time,
+    # and the terrain hides the submerged part.  Corners are inset by the
+    # leg radius + 5 mm; the deck centreline walk path is >0.2 m clear.
+    leg_r = float(getattr(geometry, "landing_table_leg_radius_m", 0.0))
+    if leg_r > 0.0:
+        half_leg = 0.175
+        for sx in (1.0, -1.0):
+            for sy in (1.0, -1.0):
+                leg = spec.body("tread").add_geom(
+                    name=f"table_leg_{'f' if sx > 0 else 'b'}{'l' if sy > 0 else 'r'}",
+                    type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                    pos=(sx * (hd - leg_r - 0.005), sy * (hw - leg_r - 0.005), -ht - half_leg),
+                    size=(leg_r, half_leg),
+                )
+                leg.contype = 0
+                leg.conaffinity = 0
+                leg.rgba = [0.45, 0.28, 0.13, 1]
     return spec
 
 
 def make_rail_spec(geometry: StairLadderGeometry) -> mujoco.MjSpec:
     return _box_spec(
         "rail",
-        (0.5 * geometry.rail_depth_m, 0.5 * geometry.rail_width_m, 0.5 * geometry.rail_length_m),
+        (0.5 * geometry.rail_depth_m, 0.5 * geometry.rail_width_m, 0.5 * geometry.rail_length_m + geometry.rail_overhang_m * 0.5),
         "0.52 0.32 0.14 1",
         0.9,
     )
@@ -754,8 +784,14 @@ def rail_poses(
     dyaw: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Rail centres (N, 2F, 3) and quaternions (N, 2F, 4), long axis along the
-    incline; order matches :func:`rail_entity_names` (left, right per flight)."""
-    half = 0.5 * geometry.rail_length_m
+    incline; order matches :func:`rail_entity_names` (left, right per flight).
+
+    ``rail_overhang_m`` extends each rail past its nominal TOP end by that
+    many metres (the bottom end is unchanged): the half length grows by
+    overhang/2 and the centre shifts overhang/2 up the incline, matching
+    :func:`make_rail_spec`.  0.0 is byte-identical to the stock rails.
+    """
+    half = 0.5 * geometry.rail_length_m + 0.5 * geometry.rail_overhang_m
     rail_v = 0.5 * geometry.clear_width_m + 0.5 * geometry.rail_width_m
     if riser is None:
         riser = torch.zeros_like(x0)

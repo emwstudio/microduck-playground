@@ -323,6 +323,16 @@ def make_microduck_simple_stairs_env_cfg(
         # walks the stairs, walks onto the deck, and only then runs out of
         # stairs.  SIMPLE_STAIRS_LANDING_FLUSH=0 restores the riser.
         landing_flush=os.getenv("SIMPLE_STAIRS_LANDING_FLUSH", "1") == "1",
+        # Visual dressing for the endgame demo (2026-09-28), both default ON
+        # for simple_stairs, always OFF for the ladder family:
+        # table legs under the landing box (non-collidable cylinders hanging
+        # past the floor plane) — SIMPLE_STAIRS_TABLE_LEGS=0 disables;
+        # side rails leaning 0.12 m past the top onto the table edge —
+        # SIMPLE_STAIRS_RAIL_OVERHANG_M=0 disables.
+        landing_table_leg_radius_m=(
+            0.0075 if os.getenv("SIMPLE_STAIRS_TABLE_LEGS", "1") == "1" else 0.0
+        ),
+        rail_overhang_m=float(os.getenv("SIMPLE_STAIRS_RAIL_OVERHANG_M", "0.12")),
     )
     cfg = make_microduck_ladder_env_cfg(
         play=play,
