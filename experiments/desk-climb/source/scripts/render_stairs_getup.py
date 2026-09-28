@@ -250,14 +250,18 @@ def main() -> None:
         for step in range(steps):
             # --- walk-on bookkeeping (before the policy acts) ---
             if a.walk_on and not bool(switched[0]):
-                contacts = mdp._stair_contacts(raw)
-                if not walk_active and bool((contacts["foot_tread"] == top_idx).all(dim=1)[0]):
-                    walk_active = True
-                    walk_start_x = float(robot.data.root_link_pos_w[0, 0])
-                    vt_x = max(
-                        float(robot.data.site_pos_w[0, sites, 0].max()), walk_start_x
-                    ) + 0.05
-                    print(f"[seed {seed}] walk-on starts at {step * raw.step_dt:.2f}s (x={walk_start_x:.3f})")
+                if not walk_active:
+                    # Flush landings share the last tread's level, so classify
+                    # "on the deck" by the landing box's xy footprint, not by
+                    # the contact geom (a foot mid-seam can read the mini tread).
+                    feet_xyz = robot.data.site_pos_w[:, sites, :]
+                    if bool(mdp.feet_on_landing_xy(st, feet_xyz).all(dim=1)[0]):
+                        walk_active = True
+                        walk_start_x = float(robot.data.root_link_pos_w[0, 0])
+                        vt_x = max(
+                            float(robot.data.site_pos_w[0, sites, 0].max()), walk_start_x
+                        ) + 0.05
+                        print(f"[seed {seed}] walk-on starts at {step * raw.step_dt:.2f}s (x={walk_start_x:.3f})")
                 if walk_active:
                     vt_x = walk_on_advance(vt_x, float(top_c[0]) + half_d - 0.04, 0.04, raw.step_dt)
                     yaw = float(mdp._yaw_from_quat(robot.data.root_link_quat_w)[0])

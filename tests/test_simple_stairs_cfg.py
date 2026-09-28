@@ -503,3 +503,147 @@ def test_walk_on_helpers():
     assert mod.on_deck_xy(np.array([0.30, 0.10]), np.array([0.30, 0.0]), 0.20, 0.30)
     assert not mod.on_deck_xy(np.array([0.55, 0.10]), np.array([0.30, 0.0]), 0.20, 0.30)
     assert not mod.on_deck_xy(np.array([0.30, 0.31]), np.array([0.30, 0.0]), 0.20, 0.30)
+
+
+# --- flush-landing foot_tread classification (xy, not z) -------------------------
+
+
+def _flush_state(flush: bool):
+    """Real tread layout at riser 25 mm / 20 deg for the simple_stairs
+    geometry, with landing_flush on/off — nothing hardcoded."""
+    import dataclasses
+    from types import SimpleNamespace
+
+    g = ss.SIMPLE_STAIRS_GEOMETRY
+    # Mirror the factory's production geometry (flush + zero landing setback).
+    g = dataclasses.replace(g, landing_setback_m=0.0)
+    if flush:
+        g = dataclasses.replace(g, landing_flush=True)
+    riser = torch.tensor([0.025])
+    angle = torch.tensor([math.radians(20.0)])
+    x0 = torch.zeros(1)
+    y0 = torch.zeros(1)
+    centres, tops, nose_u, target_xy, tread_yaw = lad.tread_layout(g, riser, angle, x0, y0)
+    return SimpleNamespace(
+        geometry=g,
+        tread_side=torch.tensor([float(g.tread_side(i)) for i in range(g.num_treads)]),
+        tread_top=tops,
+        tread_centre=centres,
+        tread_target_xy=target_xy,
+        tread_yaw=tread_yaw,
+        _nose_u=nose_u,
+    )
+
+
+class _StubAsset:
+    def __init__(self, feet_xyz):
+        self.data = type(
+            "Data",
+            (),
+            {
+                "site_pos_w": torch.tensor(feet_xyz, dtype=torch.float32),
+                "root_link_pos_w": torch.zeros(len(feet_xyz), 3),
+                "projected_gravity_b": torch.tensor([[0.0, 0.0, -1.0]]),
+                "root_link_lin_vel_w": torch.zeros(len(feet_xyz), 3),
+                "root_link_ang_vel_w": torch.zeros(len(feet_xyz), 3),
+            },
+        )()
+
+    def find_sites(self, name):
+        return ([0 if name == "left_foot" else 1], None)
+
+
+def _target_index(state, feet_xyz):
+    env = type("E", (), {"num_envs": 1, "device": "cpu", "common_step_counter": 0, "_stair": state})()
+    snap_mdp = _load_snapshot_mdp()
+    info = snap_mdp._stair_foot_target_info(env, _StubAsset(feet_xyz))
+    return int(info["index"][0, 0]), int(info["index"][0, 1])
+
+
+def test_flush_landing_target_candidates():
+    state = _flush_state(flush=True)
+    g = state.geometry
+    top_idx = g.num_treads - 1
+    c10 = state.tread_centre[0, top_idx - 1]
+    nose = float(state.tread_centre[0, top_idx, 0]) - 0.5 * g.landing_depth_m
+    z = float(state.tread_top[0, top_idx]) + 0.003
+    # Foot standing on the last mini tread (approach): the flush deck must be
+    # offered as the next target (the z-test alone would offer nothing).
+    feet = [[[float(c10[0]), 0.042, float(state.tread_top[0, top_idx - 1]) + 0.003],
+             [float(c10[0]), -0.042, float(state.tread_top[0, top_idx - 1]) + 0.003]]]
+    assert _target_index(state, feet) == (top_idx, top_idx)
+    # Foot already ON the deck (past the nose): still no target (end of stairs).
+    feet = [[[nose + 0.05, 0.0, z], [nose + 0.05, 0.0, z]]]
+    idx = _target_index(state, feet)
+    assert idx == (g.num_treads, g.num_treads)
+    # Foot on the second-to-last mini tread: target is the last mini tread.
+    c9 = state.tread_centre[0, top_idx - 2]
+    feet = [[[float(c9[0]), 0.042, float(state.tread_top[0, top_idx - 2]) + 0.003],
+             [float(c9[0]), -0.042, float(state.tread_top[0, top_idx - 2]) + 0.003]]]
+    assert _target_index(state, feet) == (top_idx - 1, top_idx - 1)
+    # Non-flush: byte-identical behaviour (the xy branch never runs).
+    state_nf = _flush_state(flush=False)
+    assert _target_index(state_nf, feet) == (top_idx - 1, top_idx - 1)
+    feet10 = [[[float(c10[0]), 0.042, float(state.tread_top[0, top_idx - 1]) + 0.003],
+               [float(c10[0]), -0.042, float(state.tread_top[0, top_idx - 1]) + 0.003]]]
+    assert _target_index(state_nf, feet10) == (top_idx, top_idx)  # z covers it as before
+
+
+def test_feet_on_landing_xy_classification():
+    state = _flush_state(flush=True)
+    g = state.geometry
+    top_idx = g.num_treads - 1
+    nose = float(state.tread_centre[0, top_idx, 0]) - 0.5 * g.landing_depth_m
+    top = float(state.tread_top[0, top_idx])
+    cx = float(state.tread_centre[0, top_idx, 0])
+    snap_mdp = _load_snapshot_mdp()
+    f = lambda feet: snap_mdp.feet_on_landing_xy(state, torch.tensor(feet)).tolist()
+    assert f([[[nose + 0.05, 0.0, top + 0.003], [cx, 0.10, top + 0.002]]]) == [[True, True]]
+    assert f([[[nose - 0.03, 0.0, top + 0.003], [nose + 0.05, 0.0, top + 0.003]]]) == [[False, True]]  # behind the nose
+    assert f([[[nose + 0.05, 0.0, 0.0], [nose + 0.05, 0.0, top + 0.003]]]) == [[False, True]]  # floor under the deck
+    assert f([[[nose + 0.05, 0.5 * g.landing_width_m + 0.05, top + 0.003], [nose + 0.05, 0.0, top + 0.003]]]) == [[False, True]]
+
+
+def test_flush_reached_top_xy_gate(monkeypatch):
+    state = _flush_state(flush=True)
+    g = state.geometry
+    top_idx = g.num_treads - 1
+    top = float(state.tread_top[0, top_idx])
+    nose = float(state.tread_centre[0, top_idx, 0]) - 0.5 * g.landing_depth_m
+    snap_mdp = _load_snapshot_mdp()
+
+    def _run(flush_state):
+        # Both feet INSIDE the deck footprint but the contact geom still reads
+        # the mini tread (the flush seam): success must latch via the xy gate
+        # when flush, and must NOT when non-flush (behaviour unchanged).
+        asset = _StubAsset(
+            [[[nose + 0.06, 0.042, top + 0.003], [nose + 0.06, -0.042, top + 0.003]]]
+        )
+        asset.data.root_link_pos_w = torch.tensor([[nose + 0.06, 0.0, top + 0.115]])
+        monkeypatch.setattr(
+            snap_mdp, "_stair_contacts",
+            lambda env: {
+                "foot_tread": torch.tensor([[top_idx - 1, top_idx - 1]]),
+                "foot_support": torch.tensor([[True, True]]),
+            },
+        )
+        env = type(
+            "E",
+            (),
+            {
+                "num_envs": 1,
+                "device": "cpu",
+                "step_dt": 0.02,
+                "_stair": flush_state,
+                "scene": {"robot": asset},
+                "common_step_counter": 0,
+            },
+        )()
+        fired = False
+        for i in range(30):
+            env.common_step_counter = i
+            fired |= bool(snap_mdp.ladder_reached_top(env)[0])
+        return fired
+
+    assert _run(state) is True
+    assert _run(_flush_state(flush=False)) is False

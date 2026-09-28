@@ -1172,6 +1172,29 @@ def _stair_foot_sites(env: ManagerBasedRlEnv, asset: Entity) -> list[int]:
     return cache
 
 
+def feet_on_landing_xy(state, feet_xyz: torch.Tensor, x_margin: float = 0.005, z_band: float = 0.03) -> torch.Tensor:
+    """(N, 2) bool: each foot inside the TOP landing's box footprint.
+
+    With ``landing_flush`` the landing's top continues the previous tread's
+    level, so any z-based "which tread is this foot on" test misreads a foot
+    standing on the deck as standing on the tread below.  Classify by
+    geometry instead: foot (x, y) inside the landing box's footprint (nose
+    to far edge, within half the landing width, from the state — nothing
+    hardcoded) and z within ``z_band`` of the top (rejects feet on the floor
+    under the deck).  ``feet_xyz``: (N, 2, 3) world foot positions.
+    """
+    g = state.geometry
+    c = state.tread_centre[:, -1]  # (N, 3): the top landing box's centre
+    nose = c[:, 0:1] - 0.5 * g.landing_depth_m
+    far = c[:, 0:1] + 0.5 * g.landing_depth_m
+    return (
+        (feet_xyz[..., 0] >= nose - x_margin)
+        & (feet_xyz[..., 0] <= far)
+        & ((feet_xyz[..., 1] - c[:, 1:2]).abs() <= 0.5 * g.landing_width_m + x_margin)
+        & (feet_xyz[..., 2] > state.tread_top[:, -1:] - z_band)
+    )
+
+
 # --- observations (fill the 4-D head and 6-D body command slots) ---------------
 
 
@@ -1195,6 +1218,23 @@ def _stair_foot_target_info(
         foot = asset.data.site_pos_w[:, sites[slot], :]
         side_ok = (state.tread_side == side) | (state.tread_side == 0.0)
         above = state.tread_top > (foot[:, 2:3] + min_rise)
+        if getattr(g, "landing_flush", False) and g.landing_every > 0:
+            # Flush landing: its top equals the previous tread's level, so the
+            # z-test never offers it as the next target and the duck stalls on
+            # the last mini tread.  Offer the landing to a foot in the
+            # APPROACH strip — standing on the last mini tread, before the
+            # deck nose (works for any landing setback), inside the landing
+            # width — while a foot already on the deck still gets no target
+            # (end of stairs).
+            nose = (state.tread_centre[:, -1, 0] - 0.5 * g.landing_depth_m)[:, None]
+            last_mini = state.tread_centre[:, -2, 0][:, None] if num >= 2 else nose
+            approach = (
+                (foot[:, 0:1] > last_mini - 0.01)
+                & (foot[:, 0:1] < nose + 0.005)
+                & ((foot[:, 1:2] - state.tread_centre[:, -1, 1:2]).abs() < 0.5 * g.landing_width_m)
+            )
+            land = torch.tensor([g.is_landing(i) for i in range(num)], device=env.device)
+            above = above | (land[None, :] & approach)
         candidate = torch.where(above & side_ok[None, :], arange[None, :], num)
         idx = candidate.min(dim=1).values
         clamped = idx.clamp_max(num - 1)
@@ -1904,7 +1944,15 @@ def ladder_reached_top(
         # every staircase run).  Success = both feet supported on the top
         # landing, upright, trunk above the landing.
         c = _stair_contacts(env)
-        on_top = (c["foot_tread"] == state.geometry.num_treads - 1).all(dim=1)
+        top_idx = state.geometry.num_treads - 1
+        feet_top = c["foot_tread"] == top_idx
+        if getattr(state.geometry, "landing_flush", False):
+            # Flush landing: the deck's top is level with the last mini tread,
+            # so a foot mid-seam can still read the mini tread's geom.  A foot
+            # inside the landing box's xy footprint counts as on the landing.
+            sites = _stair_foot_sites(env, asset)
+            feet_top = feet_top | feet_on_landing_xy(state, asset.data.site_pos_w[:, sites, :])
+        on_top = feet_top.all(dim=1)
         tilt = torch.acos((-asset.data.projected_gravity_b[:, 2]).clamp(-1.0, 1.0))
         # s32: "standing" also means still (root speed / spin gates) - the
         # s31 0.5 s hold never fired (a hop up then over-run never stands);
