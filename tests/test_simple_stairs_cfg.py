@@ -460,3 +460,46 @@ def test_table_legs_and_rail_overhang(monkeypatch):
     geo = ss.make_microduck_simple_stairs_env_cfg().events["reset_stair_ladder"].params["geometry"]
     assert geo.landing_table_leg_radius_m == 0.0
     assert geo.rail_overhang_m == 0.0
+
+
+# --- walk-on relay helpers --------------------------------------------------------
+
+
+def _load_relay_script():
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "experiments/desk-climb/source/scripts/render_stairs_getup.py"
+    )
+    spec = importlib.util.spec_from_file_location("_render_stairs_getup", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_walk_on_helpers():
+    import numpy as np
+
+    mod = _load_relay_script()
+    # advance: climb speed per step, clamped at the deck's far edge
+    assert mod.walk_on_advance(0.30, 0.40, 0.04, 0.02) == pytest.approx(0.3008)
+    assert mod.walk_on_advance(0.3995, 0.40, 0.04, 0.02) == 0.40
+    assert mod.walk_on_advance(0.40, 0.40, 0.04, 0.02) == 0.40
+    # obs format: per-foot [fwd, up] of (target - foot) in the yaw frame,
+    # scaled 1/0.05, per-side lateral targets, clamped to +/-5.
+    feet = np.array([[0.90, 0.04, 0.30], [0.90, -0.04, 0.30]], dtype=np.float64)
+    out = mod.walk_on_obs_targets(1.00, 0.06, 0.33, feet, 0.0)
+    assert out[0] == pytest.approx(2.0)  # fwd left = (1.00 - 0.90) / 0.05
+    assert out[1] == pytest.approx(0.6)  # up = (0.33 - 0.30) / 0.05
+    assert out[2] == pytest.approx(2.0)  # fwd right (lateral term vanishes at yaw 0)
+    assert out[3] == pytest.approx(0.6)
+    # yaw = +90 deg: fwd comes from the lateral (y) difference, per-side signed
+    out = mod.walk_on_obs_targets(1.00, 0.06, 0.33, feet, math.pi / 2)
+    assert out[0] == pytest.approx((0.06 - 0.04) / 0.05)   # left: +0.4
+    assert out[2] == pytest.approx((-0.06 + 0.04) / 0.05)  # right: -0.4
+    # far target clamps to +/-5
+    out = mod.walk_on_obs_targets(3.00, 0.06, 0.33, feet, 0.0)
+    assert out[0] == 5.0 and out[2] == 5.0
+    # deck footprint check
+    assert mod.on_deck_xy(np.array([0.30, 0.10]), np.array([0.30, 0.0]), 0.20, 0.30)
+    assert not mod.on_deck_xy(np.array([0.55, 0.10]), np.array([0.30, 0.0]), 0.20, 0.30)
+    assert not mod.on_deck_xy(np.array([0.30, 0.31]), np.array([0.30, 0.0]), 0.20, 0.30)
