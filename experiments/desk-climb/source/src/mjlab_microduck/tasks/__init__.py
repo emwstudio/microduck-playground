@@ -22,6 +22,8 @@ class MicroduckOnPolicyRunner(VelocityOnPolicyRunner):
         return out
 
     def __init__(self, env, train_cfg: dict, log_dir=None, device="cpu", **kwargs):
+        from mjlab_microduck.tasks import mdp as _microduck_mdp
+        _microduck_mdp.warn_load_without_resume(train_cfg)
         super().__init__(env, train_cfg, log_dir, device, **kwargs)
         # resolve_symmetry_config injects _env into train_cfg["algorithm"]["symmetry_cfg"]
         # in-place, sharing the same dict object with self.alg.symmetry.  Replace the

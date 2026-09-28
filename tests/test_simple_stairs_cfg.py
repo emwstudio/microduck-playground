@@ -783,3 +783,14 @@ def test_num_treads_env_var(monkeypatch):
 
     ladder_cfg = ladder_mod.make_microduck_ladder_env_cfg()
     assert ladder_cfg.events["reset_stair_ladder"].params["geometry"].num_treads == 16
+
+
+def test_warn_load_without_resume(capsys):
+    snap_mdp = _load_snapshot_mdp()
+    snap_mdp.warn_load_without_resume({"load_run": "some_run", "resume": False})
+    out = capsys.readouterr().out
+    assert "FROM SCRATCH" in out and "--agent.resume True" in out
+    snap_mdp.warn_load_without_resume({"load_run": "some_run", "resume": True})
+    assert capsys.readouterr().out == ""
+    snap_mdp.warn_load_without_resume({"resume": False})
+    assert capsys.readouterr().out == ""

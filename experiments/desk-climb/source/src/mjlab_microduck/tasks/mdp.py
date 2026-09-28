@@ -6529,6 +6529,26 @@ def face_down_prob_curriculum(
     return torch.tensor([current_prob])
 
 
+def warn_load_without_resume(train_cfg: dict) -> None:
+    """Loud guard for the silent warm-start footgun (cost ~6 runs, 2026-09).
+
+    mjlab only resolves ``--agent.load-run``/``--agent.load-checkpoint`` into
+    an actual checkpoint load when ``--agent.resume`` is True
+    (``mjlab/scripts/train.py`` computes resume_path under
+    ``if cfg.agent.resume``).  With the flags set but resume False the run
+    silently trains FROM SCRATCH — every "MICRODUCK_WARM_START=1 without
+    --agent.resume" run in the v15-v20 series was quietly from-scratch.
+    Called from MicroduckOnPolicyRunner.__init__ so the mistake prints in
+    the training log instead of costing a run."""
+    if train_cfg.get("load_run") and not train_cfg.get("resume"):
+        print(
+            "\n[mdp] ⚠️  --agent.load-run is set but --agent.resume is FALSE: "
+            "mjlab only loads the checkpoint under resume=True, so THIS RUN "
+            "TRAINS FROM SCRATCH.  For a warm start, add --agent.resume True "
+            "(with MICRODUCK_WARM_START=1 the counters/iteration still restart at 0).\n"
+        )
+
+
 class VelocityCommandCommandOnly(UniformVelocityCommand):
     """Like UniformVelocityCommand but only draws the command arrows (no actual velocity arrows)."""
 
