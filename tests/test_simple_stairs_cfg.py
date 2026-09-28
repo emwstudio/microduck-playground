@@ -381,14 +381,15 @@ def test_landing_nose_bevel_geometry():
 
 def test_simple_stairs_bevel_switch(monkeypatch):
     _patch_snapshot_mdp()
-    # Default: the 0.025 m wedge is on, in train and play alike.
+    # Default (2026-09-28): bevel off — the flush landing join was the real
+    # fix (first on-deck stand, relay seed 19927, bevel-free A/B).
     for play in (False, True):
         cfg = ss.make_microduck_simple_stairs_env_cfg(play=play)
         geo = cfg.events["reset_stair_ladder"].params["geometry"]
-        assert geo.landing_nose_bevel_m == pytest.approx(0.025)
-    # Env override restores the wall; the seed event carries the same geometry.
-    monkeypatch.setenv("SIMPLE_STAIRS_NOSE_BEVEL_M", "0.0")
+        assert geo.landing_nose_bevel_m == 0.0
+    # Env override re-enables the wedge; the seed event carries the same geometry.
+    monkeypatch.setenv("SIMPLE_STAIRS_NOSE_BEVEL_M", "0.025")
     monkeypatch.setenv("MICRODUCK_SIMPLE_STAIRS_START_LEVEL", "3")
     cfg = ss.make_microduck_simple_stairs_env_cfg()
-    assert cfg.events["reset_stair_ladder"].params["geometry"].landing_nose_bevel_m == 0.0
-    assert cfg.events["seed_start_level"].params["geometry"].landing_nose_bevel_m == 0.0
+    assert cfg.events["reset_stair_ladder"].params["geometry"].landing_nose_bevel_m == pytest.approx(0.025)
+    assert cfg.events["seed_start_level"].params["geometry"].landing_nose_bevel_m == pytest.approx(0.025)

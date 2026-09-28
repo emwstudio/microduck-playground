@@ -315,7 +315,7 @@ def make_microduck_simple_stairs_env_cfg(
     # other step.  SIMPLE_STAIRS_LANDING_SETBACK_M restores any value.
     geometry = replace(
         SIMPLE_STAIRS_GEOMETRY,
-        landing_nose_bevel_m=float(os.getenv("SIMPLE_STAIRS_NOSE_BEVEL_M", "0.025")),
+        landing_nose_bevel_m=float(os.getenv("SIMPLE_STAIRS_NOSE_BEVEL_M", "0.0")),
         landing_setback_m=float(os.getenv("SIMPLE_STAIRS_LANDING_SETBACK_M", "0.0")),
     )
     cfg = make_microduck_ladder_env_cfg(
