@@ -28,9 +28,13 @@ fixed-time fallback (``--switch-after-s``).  auto_reset is OFF so a fall
 never resets the episode mid-video; _manual_reset_pending is zeroed every
 step (the official renderer's pattern).
 
-STAND METRIC (desk-climb style): tilt < 25 deg and trunk z above
-top + 0.09 m (HOME trunk height over the feet, with margin), held
-continuously for ``--stand-hold-s`` seconds after the switch.
+STAND METRIC (relay ``stood``): tilt < 25 deg and trunk z above
+top + 0.09 m, in a CONTINUOUS run for ``--stand-hold-s`` seconds, AND both
+feet inside the landing box's xy footprint for >= 80% of the run's samples
+(``StandTracker`` — the flush deck's top is level with the last tread, so
+trunk height alone cannot separate "standing on the deck" from "standing
+on the last tread"; brief getup foot lifts inside a run are tolerated,
+a run that is mostly off-deck is discarded).
 
 WALK-ON MODE (``--walk-on``): after BOTH feet stand on the top platform
 (foot_tread == num_treads-1 for both), the relay does NOT switch on the
@@ -103,6 +107,48 @@ def on_deck_xy(pos_xy: np.ndarray, top_c_xy: np.ndarray, half_depth: float, half
         abs(float(pos_xy[0]) - float(top_c_xy[0])) <= half_depth
         and abs(float(pos_xy[1]) - float(top_c_xy[1])) <= half_width
     )
+
+
+class StandTracker:
+    """Continuous-hold stand tracker for the relay's ``stood`` metric.
+
+    The flush landing's top is LEVEL with the last mini tread, so "trunk z
+    above top + 0.09" alone cannot tell "standing on the deck" from
+    "standing on the last tread, never made it up" (a real seed-19927 false
+    positive: 14.3 s 'stand' that was actually on the tread).  A run
+    accumulates only upright-at-height steps with BOTH feet inside the
+    landing box's xy footprint.  Getup re-stands lift the feet briefly, so
+    a run is only DISCARDED when off-deck samples exceed ``off_frac_max``
+    of the run's steps (default 0.2 — i.e. >= 80% of the hold must be on
+    the deck); a topple (not upright-at-height) resets the run instantly.
+    """
+
+    def __init__(self, off_frac_max: float = 0.2):
+        self.off_frac_max = off_frac_max
+        self.held = 0.0
+        self.off = 0.0
+        self.started = False
+
+    def update(self, upright_at_height: bool, feet_on_deck: bool, dt: float) -> None:
+        if not upright_at_height:
+            self.held = 0.0
+            self.off = 0.0
+            self.started = False
+            return
+        if feet_on_deck:
+            self.held += dt
+            self.started = True
+        else:
+            self.off += dt
+        total = self.held + self.off
+        if total > 0.0 and self.off / total > self.off_frac_max:
+            # The run is mostly off the deck — it never happened.
+            self.held = 0.0
+            self.off = 0.0
+            self.started = False
+
+    def stood(self, hold_s: float) -> bool:
+        return self.held >= hold_s
 
 
 def main() -> None:
@@ -238,7 +284,7 @@ def main() -> None:
         switch_step = None
         switch_reason = None
         fall_streak = 0
-        stand_step = None
+        tracker = StandTracker()
         stand_held = 0.0
         tilt = torch.zeros(1, device=raw.device)
         # walk-on state
@@ -319,22 +365,26 @@ def main() -> None:
             assert torch.isfinite(act).all()
 
             if switch_step is not None:
-                standing = bool((tilt[0] < math.radians(a.stand_tilt_deg)) and bool(z[0] > top_z[0] + a.stand_above_top_m))
-                if standing:
-                    if stand_step is None:
-                        stand_step = step
-                    stand_held += raw.step_dt
-                else:
-                    stand_step = None
-                    stand_held = 0.0  # the hold must be continuous (desk-climb metric)
+                # stood = upright at deck height for a CONTINUOUS hold with
+                # >= 80% of samples both-feet-on-deck (flush top == last
+                # tread's top, so trunk height alone cannot tell them apart).
+                up_hi = bool(
+                    (tilt[0] < math.radians(a.stand_tilt_deg))
+                    and bool(z[0] > top_z[0] + a.stand_above_top_m)
+                )
+                feet_ok = bool(
+                    mdp.feet_on_landing_xy(st, robot.data.site_pos_w[:, sites, :]).all(dim=1)[0]
+                )
+                tracker.update(up_hi, feet_ok, raw.step_dt)
+                stand_held = tracker.held
 
-        stood = stand_held >= a.stand_hold_s
+        stood = tracker.stood(a.stand_hold_s)
         final_x = float(robot.data.root_link_pos_w[0, 0])
         walk_distance = (final_x - walk_start_x) if walk_start_x is not None else 0.0
         print(
             f"[seed {seed}] switched={switch_step is not None}({switch_reason}) "
             f"walk_on={walk_active} walk_dist={walk_distance:.3f}m fell_on_deck={fell_on_deck} "
-            f"stand_held={stand_held:.2f}s stood(>= {a.stand_hold_s}s)={stood}"
+            f"stand_held={stand_held:.2f}s(off={tracker.off:.2f}) stood(>= {a.stand_hold_s}s)={stood}"
         )
         return {
             "seed": seed,
@@ -346,6 +396,7 @@ def main() -> None:
             "fell_on_deck": bool(fell_on_deck),
             "stood": bool(stood),
             "stand_held_s": round(stand_held, 2),
+            "stand_off_deck_s": round(tracker.off, 2),
             "final_tilt_deg": round(math.degrees(float(tilt[0])), 1),
             "video": f"seed_{seed}/",
         }
