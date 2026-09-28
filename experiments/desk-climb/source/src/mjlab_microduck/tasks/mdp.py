@@ -865,9 +865,25 @@ def reset_stair_ladder(
         env.scene[_ladder.TOP_FLOOR_ENTITY].write_mocap_pose_to_sim(pose, env_ids=env_ids)
     rail_pos, rail_quat = _ladder.rail_poses(geometry, angle, x0, y0, riser, flat, lateral, dyaw)
     for slot, name in enumerate(_ladder.rail_entity_names(geometry)):
+        if name.startswith("rail_ext"):
+            continue  # horizontal resting segments are posed below
         entity = env.scene[name]
         pose = torch.cat((rail_pos[:, slot] + origins, rail_quat[:, slot]), dim=-1)
         entity.write_mocap_pose_to_sim(pose, env_ids=env_ids)
+    if geometry.rail_overhang_m > 0.0 and geometry.landing_every > 0:
+        # Horizontal overhang: the rails REST on the top deck (1.5 mm float)
+        # instead of continuing along the incline into the platform box.
+        fyaw = (
+            state.flight_yaw[env_ids, -1]
+            if hasattr(state, "flight_yaw")
+            else torch.zeros(n, device=dev)
+        )
+        ext_pos, ext_quat = _ladder.rail_ext_poses(
+            geometry, state.tread_centre[env_ids, -1], state.tread_top[env_ids, -1], fyaw
+        )
+        for k, name in enumerate(("rail_ext_left", "rail_ext_right")):
+            pose = torch.cat((ext_pos[:, k], ext_quat[:, k]), dim=-1)
+            env.scene[name].write_mocap_pose_to_sim(pose, env_ids=env_ids)
 
     # --- robot root and joints -----------------------------------------------
     yaw = start_yaw + (torch.rand(n, device=dev) * 2.0 - 1.0) * math.radians(yaw_noise_deg)

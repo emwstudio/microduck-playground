@@ -77,10 +77,14 @@ RAIL_ENTITY_NAMES = ("rail_left", "rail_right")
 
 
 def rail_entity_names(geometry: "StairLadderGeometry") -> tuple[str, ...]:
-    """Two rails per flight: rail_left, rail_right, rail_left_1, rail_right_1, ..."""
+    """Two rails per flight: rail_left, rail_right, rail_left_1, rail_right_1, ...
+    Plus, when ``rail_overhang_m`` > 0, the horizontal resting segments
+    ``rail_ext_left``/``rail_ext_right`` on the top deck (see rail_ext_poses)."""
     names = list(RAIL_ENTITY_NAMES)
     for f in range(1, geometry.num_flights):
         names += [f"rail_left_{f}", f"rail_right_{f}"]
+    if geometry.rail_overhang_m > 0.0 and geometry.landing_every > 0:
+        names += ["rail_ext_left", "rail_ext_right"]
     return tuple(names)
 # Treads and rails are parked here until the reset event positions them.
 PARKED_POS = (0.0, 0.0, -2.0)
@@ -455,10 +459,54 @@ def _landing_spec(geometry: StairLadderGeometry) -> mujoco.MjSpec:
 def make_rail_spec(geometry: StairLadderGeometry) -> mujoco.MjSpec:
     return _box_spec(
         "rail",
-        (0.5 * geometry.rail_depth_m, 0.5 * geometry.rail_width_m, 0.5 * geometry.rail_length_m + geometry.rail_overhang_m * 0.5),
+        (0.5 * geometry.rail_depth_m, 0.5 * geometry.rail_width_m, 0.5 * geometry.rail_length_m),
         "0.52 0.32 0.14 1",
         0.9,
     )
+
+
+def _rail_ext_spec(geometry: StairLadderGeometry) -> mujoco.MjSpec:
+    """Horizontal resting segment of the overhung rail (the part that LIES on
+    the deck; the inclined stock rail is unchanged).  Long axis along the
+    flight direction (+x at yaw 0), same cross-section as the stock rail."""
+    return _box_spec(
+        "rail_ext",
+        (0.5 * geometry.rail_overhang_m, 0.5 * geometry.rail_width_m, 0.5 * geometry.rail_depth_m),
+        "0.52 0.32 0.14 1",
+        0.9,
+    )
+
+
+def _rail_spec_for(geometry: StairLadderGeometry, name: str) -> mujoco.MjSpec:
+    return _rail_ext_spec(geometry) if name.startswith("rail_ext") else make_rail_spec(geometry)
+
+
+def rail_ext_poses(
+    geometry: StairLadderGeometry,
+    top_centre: torch.Tensor,
+    top_z: torch.Tensor,
+    flight_yaw: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """World poses (N, 2, 3) and quats (N, 2, 4) of the horizontal resting
+    segments, (left, right) order.  Each segment starts 1 cm past the top
+    deck's nose (along the flight yaw) and extends ``rail_overhang_m`` across
+    the deck surface; its box bottom floats 1.5 mm above the deck top (z-
+    fighting guard), so the rails REST on the table instead of diving into
+    it.  ``top_centre``: (N, 3) world centre of the top landing box;
+    ``top_z``: (N,) its top height; ``flight_yaw``: (N,) last flight's yaw.
+    """
+    nose = top_centre[:, 0] - 0.5 * geometry.landing_depth_m
+    v = 0.5 * geometry.clear_width_m + 0.5 * geometry.rail_width_m
+    c, s = torch.cos(flight_yaw), torch.sin(flight_yaw)
+    u = 0.01 + 0.5 * geometry.rail_overhang_m
+    slots = []
+    for side in (1.0, -1.0):
+        x = nose + u * c - side * v * s
+        y = top_centre[:, 1] + u * s + side * v * c
+        z = top_z + 0.0015 + 0.5 * geometry.rail_depth_m
+        slots.append(torch.stack((x, y, z), dim=-1))
+    quats = quat_yaw(flight_yaw)[:, None, :].expand(-1, 2, -1)
+    return torch.stack(slots, dim=1), quats
 
 
 def make_stair_ladder_entity_cfgs(geometry: StairLadderGeometry) -> dict[str, EntityCfg]:
@@ -476,7 +524,7 @@ def make_stair_ladder_entity_cfgs(geometry: StairLadderGeometry) -> dict[str, En
         )
     for name in rail_entity_names(geometry):
         cfgs[name] = EntityCfg(
-            spec_fn=lambda: make_rail_spec(geometry), init_state=parked
+            spec_fn=lambda name=name: _rail_spec_for(geometry, name), init_state=parked
         )
     if geometry.landing_polygons is not None:
         # Corner staircase: the upper floor beyond the last landing (c2 probe
@@ -784,14 +832,9 @@ def rail_poses(
     dyaw: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Rail centres (N, 2F, 3) and quaternions (N, 2F, 4), long axis along the
-    incline; order matches :func:`rail_entity_names` (left, right per flight).
-
-    ``rail_overhang_m`` extends each rail past its nominal TOP end by that
-    many metres (the bottom end is unchanged): the half length grows by
-    overhang/2 and the centre shifts overhang/2 up the incline, matching
-    :func:`make_rail_spec`.  0.0 is byte-identical to the stock rails.
-    """
-    half = 0.5 * geometry.rail_length_m + 0.5 * geometry.rail_overhang_m
+    incline; order matches :func:`rail_entity_names`'s STOCK rails (the
+    ``rail_ext_*`` resting segments are posed separately, see rail_ext_poses)."""
+    half = 0.5 * geometry.rail_length_m
     rail_v = 0.5 * geometry.clear_width_m + 0.5 * geometry.rail_width_m
     if riser is None:
         riser = torch.zeros_like(x0)

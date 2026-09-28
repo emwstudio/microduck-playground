@@ -431,24 +431,20 @@ def test_table_legs_and_rail_overhang(monkeypatch):
     assert all(int(x.contype) == 0 and int(x.conaffinity) == 0 for x in legs)
     g_both = dataclasses.replace(g_legs, landing_nose_bevel_m=0.025)
     assert len(lad.make_tread_spec(g_both, 11).body("tread").geoms) == 6
-    # Rail overhang: stock poses identical at 0; at 0.12 the top end extends
-    # 0.12 m along the incline (centre shifts 0.06), the bottom end is fixed,
-    # and the spec half-length grows by 0.06.
+    # Rail overhang: stock incline poses/spec identical at any overhang (the
+    # extension is a separate horizontal resting segment, tested in
+    # test_rails_rest_on_deck_not_embedded).
     angle = torch.tensor([math.radians(20.0)])
     x0 = torch.zeros(1)
     y0 = torch.zeros(1)
     p0, q0 = lad.rail_poses(g, angle, x0, y0)
     g_oh = dataclasses.replace(g, rail_overhang_m=0.12)
     p1, q1 = lad.rail_poses(g_oh, angle, x0, y0)
-    assert torch.allclose(q0, q1)  # same incline
-    a20 = math.radians(20.0)
-    shift = p1 - p0
-    assert float(shift[0, 0, 0]) == pytest.approx(0.06 * math.cos(a20), abs=1e-6)
-    assert float(shift[0, 0, 1]) == pytest.approx(0.0, abs=1e-6)
-    assert float(shift[0, 0, 2]) == pytest.approx(0.06 * math.sin(a20), abs=1e-6)
+    assert torch.allclose(p0, p1)
+    assert torch.allclose(q0, q1)
     s0 = float(lad.make_rail_spec(g).body("rail").geoms[0].size[2])
     s1 = float(lad.make_rail_spec(g_oh).body("rail").geoms[0].size[2])
-    assert s1 - s0 == pytest.approx(0.06)
+    assert s1 == pytest.approx(s0)
     # simple_stairs switches: default ON, env-off restores stock.
     _patch_snapshot_mdp()
     cfg = ss.make_microduck_simple_stairs_env_cfg()
@@ -647,3 +643,90 @@ def test_flush_reached_top_xy_gate(monkeypatch):
 
     assert _run(state) is True
     assert _run(_flush_state(flush=False)) is False
+
+
+def test_rails_rest_on_deck_not_embedded():
+    import dataclasses
+
+    g = lad.StairLadderGeometry(num_treads=12, alternating=False, tread_depth_m=0.060, landing_every=12)
+    # Stock behaviour: no overhang -> no ext entities, incline spec/poses unchanged.
+    assert not any(n.startswith("rail_ext") for n in lad.rail_entity_names(g))
+    g_oh = dataclasses.replace(g, rail_overhang_m=0.12, landing_flush=True)
+    names = lad.rail_entity_names(g_oh)
+    assert names[-2:] == ("rail_ext_left", "rail_ext_right")
+    # The inclined stock rail is byte-identical to no-overhang (poses + spec).
+    angle = torch.tensor([math.radians(20.0)])
+    x0 = torch.zeros(1)
+    y0 = torch.zeros(1)
+    p0, q0 = lad.rail_poses(g, angle, x0, y0)
+    p1, q1 = lad.rail_poses(g_oh, angle, x0, y0)
+    assert torch.allclose(p0, p1) and torch.allclose(q0, q1)
+    s0 = lad.make_rail_spec(g).body("rail").geoms[0].size
+    s1 = lad.make_rail_spec(g_oh).body("rail").geoms[0].size
+    assert all(float(a) == pytest.approx(float(b)) for a, b in zip(s0, s1))
+    # The resting segment: horizontal box, overhang long, same cross-section.
+    ext_spec = lad._rail_spec_for(g_oh, "rail_ext_left")
+    size = ext_spec.body("rail_ext").geoms[0].size
+    assert float(size[0]) == pytest.approx(0.06)
+    assert float(size[1]) == pytest.approx(0.5 * g_oh.rail_width_m)
+    assert float(size[2]) == pytest.approx(0.5 * g_oh.rail_depth_m)
+    # Resting pose: starts 1 cm past the nose, bottom floats 1.5 mm above the
+    # deck top (RESTS on it, never inside the box), yaw-only quat, and clear
+    # of the duck's central walk path on the deck.
+    riser = torch.tensor([0.025])
+    centres, tops, _n, _txy, _yaw = lad.tread_layout(g_oh, riser, angle, x0, y0)
+    fyaw = torch.zeros(1)
+    pos, quat = lad.rail_ext_poses(g_oh, centres[:, -1], tops[:, -1], fyaw)
+    top = float(tops[0, -1])
+    nose = float(centres[0, -1, 0]) - 0.5 * g_oh.landing_depth_m
+    for k in range(2):
+        bottom = float(pos[0, k, 2]) - 0.5 * g_oh.rail_depth_m
+        assert bottom == pytest.approx(top + 0.0015)  # rests on the deck, not embedded
+        assert float(pos[0, k, 0]) == pytest.approx(nose + 0.01 + 0.06)
+        assert float(quat[0, k, 1]) == 0.0 and float(quat[0, k, 2]) == 0.0  # yaw-only
+    v = 0.5 * g_oh.clear_width_m + 0.5 * g_oh.rail_width_m
+    assert v < 0.5 * g_oh.landing_width_m  # lies on the deck surface (at the sides)
+    assert v - 0.06 > 0.5 * g_oh.rail_width_m + 0.03  # clear of the duck's foot targets (y = ±0.06)
+
+
+def test_stand_tracker_deck_gate():
+    mod = _load_relay_script()
+    dt = 0.02
+    # (a) upright at deck height but standing on the LAST TREAD (feet off
+    # deck) for 14 s -> never stood (the seed-19927 false positive).
+    tr = mod.StandTracker()
+    for _ in range(round(14.0 / dt)):
+        tr.update(True, False, dt)
+    assert not tr.stood(3.0)
+    # (b) on the deck for 3.2 s continuous -> stood.
+    tr = mod.StandTracker()
+    for _ in range(round(3.2 / dt)):
+        tr.update(True, True, dt)
+    assert tr.stood(3.0)
+    # (c) on-deck run with a brief getup foot lift (0.3 s off in 1.7 s =
+    # 18% < 20%) -> the run survives, held counts on-deck time only.
+    tr = mod.StandTracker()
+    for _ in range(round(1.4 / dt)):
+        tr.update(True, True, dt)
+    for _ in range(round(0.3 / dt)):
+        tr.update(True, False, dt)
+    for _ in range(round(1.8 / dt)):
+        tr.update(True, True, dt)
+    assert tr.stood(3.0)
+    # (d) a long off-deck stretch (0.8 s off in 3.0 s = 27% > 20%) -> invalid.
+    tr = mod.StandTracker()
+    for _ in range(round(1.2 / dt)):
+        tr.update(True, True, dt)
+    for _ in range(round(0.8 / dt)):
+        tr.update(True, False, dt)
+    for _ in range(round(2.5 / dt)):
+        tr.update(True, True, dt)
+    assert not tr.stood(3.0)
+    # (e) any topple resets the run.
+    tr = mod.StandTracker()
+    for _ in range(round(2.0 / dt)):
+        tr.update(True, True, dt)
+    tr.update(False, True, dt)
+    for _ in range(round(2.0 / dt)):
+        tr.update(True, True, dt)
+    assert not tr.stood(3.0)
