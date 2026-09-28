@@ -942,3 +942,113 @@ def test_v21_deck_spawn_params():
 
     snap_mdp = _load_snapshot_mdp()
     assert "deck_spawn_prob" in inspect.signature(snap_mdp.reset_stair_ladder).parameters
+
+
+class _ResetStubEntity:
+    def __init__(self):
+        self.mocap_poses = []
+
+    def write_mocap_pose_to_sim(self, pose, env_ids=None):
+        self.mocap_poses.append((pose, env_ids))
+
+
+class _ResetStubAsset:
+    """Minimal Entity stand-in for reset_stair_ladder (14 servo joints)."""
+
+    _JOINT_IDS = {
+        "left_hip_pitch": 0,
+        "left_knee": 1,
+        "left_ankle": 2,
+        "right_hip_pitch": 3,
+        "right_knee": 4,
+        "right_ankle": 5,
+    }
+
+    def __init__(self, num_envs, num_joints=14):
+        self.data = type(
+            "Data",
+            (),
+            {
+                "default_joint_pos": torch.zeros(num_envs, num_joints),
+                "joint_pos_limits": torch.stack(
+                    (
+                        torch.full((num_envs, num_joints), -1.0),
+                        torch.full((num_envs, num_joints), 1.0),
+                    ),
+                    dim=-1,
+                ),
+            },
+        )()
+        self.root_pose = None
+        self.joint_pos_written = None
+
+    def find_joints(self, pattern):
+        if "passive_" in pattern:
+            return (list(range(14)), None)
+        return ([self._JOINT_IDS[pattern.strip("^$")]], None)
+
+    def write_joint_state_to_sim(self, joint_pos, joint_vel, env_ids=None):
+        self.joint_pos_written = joint_pos
+
+    def write_root_link_pose_to_sim(self, pose, env_ids=None):
+        self.root_pose = pose
+
+    def write_root_link_velocity_to_sim(self, vel, env_ids=None):
+        pass
+
+
+class _ResetStubScene:
+    def __init__(self, num_envs, geometry, asset):
+        self.env_origins = torch.zeros(num_envs, 3)
+        self.env_origins[:, 0] = torch.arange(num_envs, dtype=torch.float32) * 2.0
+        self.env_origins[:, 2] = 1.0 + torch.arange(num_envs, dtype=torch.float32) * 0.001
+        self._map = {"robot": asset}
+        for i in range(geometry.num_treads):
+            self._map[f"tread_{i:02d}"] = _ResetStubEntity()
+        self._map["top_floor"] = _ResetStubEntity()
+        for name in ("rail_left", "rail_right"):
+            self._map[name] = _ResetStubEntity()
+        self.entities = dict(self._map)
+
+    def __getitem__(self, name):
+        return self._map[name]
+
+
+def test_v21_deck_spawn_reset_bookkeeping():
+    """reset_stair_ladder with the deck branch forced on every env (the
+    1024-env crash: foot_support_z broadcast (nd,) - (nd,1) into (nd,nd))."""
+    import dataclasses
+
+    snap_mdp = _load_snapshot_mdp()
+    g = dataclasses.replace(
+        ss.SIMPLE_STAIRS_GEOMETRY, landing_flush=True, landing_setback_m=0.0
+    )
+    num_envs = 256
+    env = type("E", (), {"num_envs": num_envs, "device": "cpu"})()
+    asset = _ResetStubAsset(num_envs)
+    env.scene = _ResetStubScene(num_envs, g, asset)
+    env_ids = torch.arange(num_envs)
+    snap_mdp.reset_stair_ladder(
+        env,
+        env_ids,
+        geometry=g,
+        floor_spawn_prob=0.0,
+        top_approach_prob=0.0,
+        deck_spawn_prob=1.0,
+        open_riser=True,
+    )
+    state = env._stair
+    top_idx = g.num_treads - 1
+    # Every env took the deck branch (prob 1.0, no floor / top-approach draws).
+    assert bool(state.spawn_on_top.all())
+    assert int(state.start_tread.max()) == top_idx and int(state.start_tread.min()) == top_idx
+    assert int(state.foot_last_tread.max()) == top_idx and int(state.foot_last_tread.min()) == top_idx
+    # Both feet's support z is the deck top relative to the env origin.
+    top_rel = state.tread_top[:, -1] - env.scene.env_origins[:, 2]
+    assert state.foot_support_z.shape == (num_envs, 2)
+    assert torch.allclose(
+        state.foot_support_z, top_rel[:, None].expand(-1, 2), atol=1e-6
+    )
+    # Deck root: 6 cm past the nose (+/-1 cm spawn noise).
+    nose = state.tread_centre[:, -1, 0] - 0.5 * g.landing_depth_m
+    assert float((asset.root_pose[:, 0] - (nose + 0.06)).abs().max()) <= 0.0101

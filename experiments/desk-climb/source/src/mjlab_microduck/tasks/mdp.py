@@ -1028,11 +1028,14 @@ def reset_stair_ladder(
     state.overstep[env_ids] = False
     if bool(force_deck.any()):
         # v21 deck spawn bookkeeping: both feet on the top landing.
-        state.foot_last_tread[env_ids[force_deck]] = top_idx
-        state.foot_support_z[env_ids[force_deck]] = (
-            state.tread_top[env_ids[force_deck], -1] - origins[force_deck, 2:3]
-        ).expand(-1, 2)
-        state.start_tread[env_ids[force_deck]] = top_idx
+        deck_ids = env_ids[force_deck]
+        state.foot_last_tread[deck_ids] = top_idx
+        # (nd,) - (nd,): keep both operands flat — ``origins[force_deck, 2:3]``
+        # is (nd, 1) and broadcasts against a flat (nd,) into an (nd, nd)
+        # outer difference (crashed the first 1024-env reset).
+        top_rel = state.tread_top[deck_ids, -1] - origins[force_deck, 2]
+        state.foot_support_z[deck_ids] = top_rel[:, None].expand(-1, 2)
+        state.start_tread[deck_ids] = top_idx
     if hasattr(state, "prev_potential"):
         state.prev_potential[env_ids] = torch.minimum(
             root_z, state.foot_support_z[env_ids].mean(dim=1) + origins[:, 2] + 0.125
