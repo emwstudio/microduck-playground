@@ -322,6 +322,15 @@ def make_microduck_simple_stairs_env_cfg(
     # other step.  SIMPLE_STAIRS_LANDING_SETBACK_M restores any value.
     geometry = replace(
         SIMPLE_STAIRS_GEOMETRY,
+        # Tread count (user 2026-09-28: plays with 25-tread stairs).
+        # landing_every FOLLOWS num_treads so only the top platform is a
+        # landing — same semantics as the stock 12-tread flight.  Everything
+        # downstream is num_treads-adaptive (asserted in tests): course
+        # table (riser/angle only), top-approach spawn (num_treads-4..-2),
+        # v20 stall exemption (num_treads-1), reached_top / feet_on_landing_xy
+        # (state geometry), walk-on targets, per-side foot targets.
+        num_treads=int(os.getenv("SIMPLE_STAIRS_NUM_TREADS", "12")),
+        landing_every=int(os.getenv("SIMPLE_STAIRS_NUM_TREADS", "12")),
         landing_nose_bevel_m=float(os.getenv("SIMPLE_STAIRS_NOSE_BEVEL_M", "0.0")),
         landing_setback_m=float(os.getenv("SIMPLE_STAIRS_LANDING_SETBACK_M", "0.0")),
         # Ladder-leaning-on-desk (user 2026-09-28): the top platform's top

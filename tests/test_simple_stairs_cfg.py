@@ -735,3 +735,51 @@ def test_stand_tracker_deck_gate():
     for _ in range(round(2.0 / dt)):
         tr.update(True, True, dt)
     assert not tr.stood(3.0)
+
+
+def test_num_treads_env_var(monkeypatch):
+    _patch_snapshot_mdp()
+    # Default: byte-identical to today's 12-tread geometry.
+    cfg = ss.make_microduck_simple_stairs_env_cfg()
+    geo = cfg.events["reset_stair_ladder"].params["geometry"]
+    assert geo.num_treads == 12 and geo.landing_every == 12
+    assert geo.is_landing(11) and not geo.is_landing(10)
+    # 25 treads: landing follows (only the top platform), all the adaptive
+    # consumers see the new top index.
+    monkeypatch.setenv("SIMPLE_STAIRS_NUM_TREADS", "25")
+    cfg = ss.make_microduck_simple_stairs_env_cfg()
+    geo = cfg.events["reset_stair_ladder"].params["geometry"]
+    assert geo.num_treads == 25 and geo.landing_every == 25
+    assert geo.is_landing(24) and not geo.is_landing(23)
+    assert geo.num_flights == 1  # single flight, no walking paths
+    # Entity set follows: 25 treads + stock rails (+ resting segments when
+    # the overhang is explicitly enabled — it is off by default since 81d4704).
+    monkeypatch.setenv("SIMPLE_STAIRS_RAIL_OVERHANG_M", "0.12")
+    cfg = ss.make_microduck_simple_stairs_env_cfg()
+    geo = cfg.events["reset_stair_ladder"].params["geometry"]
+    cfgs = lad.make_stair_ladder_entity_cfgs(geo)
+    assert sum(1 for k in cfgs if k.startswith("tread_")) == 25
+    assert {"rail_left", "rail_right", "rail_ext_left", "rail_ext_right"} <= set(cfgs)
+    # v20 stall exemption threshold follows (num_treads - 1 = 24).
+    import torch as _t
+    from types import SimpleNamespace
+
+    fake_mdp = SimpleNamespace(
+        ladder_tread_stall_penalty=lambda env, stall_s=4.0: _t.full((env.num_envs,), -1.0),
+        _stair_state=lambda env: env._stair,
+    )
+    monkeypatch.setattr(ss, "microduck_mdp", fake_mdp)
+    wrapper = ss._tread_stall_top_exempt
+    env24 = _StubStairEnv([[24, 24]], [100])
+    env24._stair.geometry = geo
+    assert wrapper(env24).tolist() == [0.0]
+    env23 = _StubStairEnv([[23, 24]], [100])
+    env23._stair.geometry = geo
+    assert wrapper(env23).tolist() == [-1.0]
+    # Top-approach spawn band follows: num_treads-4 .. num_treads-2 = 21..23.
+    assert (geo.num_treads - 4, geo.num_treads - 2) == (21, 23)
+    # Ladder family: untouched by the new env var.
+    from mjlab_microduck.tasks import microduck_ladder_env_cfg as ladder_mod
+
+    ladder_cfg = ladder_mod.make_microduck_ladder_env_cfg()
+    assert ladder_cfg.events["reset_stair_ladder"].params["geometry"].num_treads == 16
